@@ -977,7 +977,11 @@ fn adaptiveBreakerCoordinates(p: vec2<f32>, time: f32) -> vec2<f32> {
   let domainHalfDiagonal = 276.0;
   let concentration = 8.2 * breakerFrontVisibility(front) * breakerEventActivation(along) * ${BREAKER_SHADER_GATE};
   let bandWidth = 12.5;
-  let correction = -concentration * tanh((across - front) / bandWidth)
+  // tanh must see a bounded argument: Metal's tanh overflows to NaN past
+  // roughly |x| = 89, and the disabled-breaker gate multiplies by 0 only
+  // *after* -- 0 * NaN is still NaN, which drops every far-field vertex it
+  // touches and tears a cell-quantised wedge out of the downwind horizon.
+  let correction = -concentration * tanh(clamp((across - front) / bandWidth, -30.0, 30.0))
     + concentration * across / domainHalfDiagonal;
   return p + travelDirection * correction;
 }
