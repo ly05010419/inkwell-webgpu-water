@@ -82,15 +82,15 @@ const TERRAIN_EXTENT = 390;
 // before that, so the water can extend far beyond the terrain for free.
 const OPEN_WATER_VIEW_SCALE = 100;
 // Orbit ceilings. The island scene keeps the authored 145 m (its camera is
-// pinned to 96 m anyway). The open ocean could otherwise pull back to 1450 m,
-// but the water clipmap is snapped to the camera while the terrain field stays
-// centred on the world: past roughly 400 m of orbit the far side of the terrain
-// emerges from under the water as bare seabed. This was always true -- at the
-// authored 145 m fog close that edge sat behind an opaque wall. Measured: clean
-// at 260 m, a trace at 300 m, obvious by 700 m; 250 m holds a margin under the
-// onset while still reaching well past the old limit.
+// pinned to 96 m anyway). The open ocean's old 250 m ceiling guarded against
+// "bare seabed emerging past ~300 m of orbit" -- that exposure was the
+// breaker-warp tanh overflowing to NaN and dropping the downwind water wedge,
+// fixed at the clamp in adaptiveBreakerCoordinates. With the surface intact
+// the ceiling only needs to stay inside the clipmap's 16384 m reach so water
+// still surrounds the camera; 12 km also keeps f32 world coordinates well
+// clear of visible spectral-UV jitter.
 const SHORE_MAX_ORBIT = 145;
-const OPEN_WATER_MAX_ORBIT = 250;
+const OPEN_WATER_MAX_ORBIT = 12000;
 // A glTF hull riding the simulated surface. It is placed near the camera target
 // so the default framing shows it, and offset from the wake impulse at (0, -12)
 // so the two read as separate features.
@@ -1147,7 +1147,12 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
   let breakerCoord = breakerCoordinates(p, uniforms.cameraTime.w);
   var output: Output;
   if (onHorizonSkirt) {
-    let towardHorizon = surface.world - uniforms.cameraTime.xyz;
+    // Project the skirt vertex as a direction so it lands on the horizon, and
+    // flatten the direction's vertical component first: from a high orbit the
+    // eye-to-vertex drop would otherwise depress the skirt's square rim by
+    // atan(eyeHeight / 20 km) below the true horizon, exposing its corners.
+    var towardHorizon = surface.world - uniforms.cameraTime.xyz;
+    towardHorizon.y = 0.0;
     var horizonClip = uniforms.viewProj * vec4<f32>(towardHorizon, 0.0);
     horizonClip.z = horizonClip.w * 0.99999;
     output.position = horizonClip;
@@ -2161,10 +2166,8 @@ export class WebGpuWaterEngine {
 
   private onWheel = (event: WheelEvent) => {
     event.preventDefault();
-    // The near limit is a framing choice and stays fixed; only the pull-back
-    // ceiling changes with the scene.
     const ceiling = this.options.scene === "shore" ? SHORE_MAX_ORBIT : OPEN_WATER_MAX_ORBIT;
-    this.radius = Math.max(18, Math.min(ceiling, this.radius * Math.exp(event.deltaY * 0.001)));
+    this.radius = Math.max(6, Math.min(ceiling, this.radius * Math.exp(event.deltaY * 0.001)));
   };
 
   private resize(force = false) {
