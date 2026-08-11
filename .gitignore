@@ -26,3 +26,6 @@ benchmarks/visual/*
 !benchmarks/visual/baseline/**
 !benchmarks/visual/final-restored/
 !benchmarks/visual/final-restored/**
+
+# TypeScript incremental build cache
+tsconfig.tsbuildinfo

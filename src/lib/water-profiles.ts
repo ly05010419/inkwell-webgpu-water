@@ -10,9 +10,9 @@ export const TETHYS_WATER_FIELD_SIZE = 192;
 export const TETHYS_REFERENCE_SIMULATION_RESOLUTION = 256;
 
 export const WATER_PROFILES = Object.freeze([
-  Object.freeze({ id: "balanced", label: "Tethys balanced", meshResolution: 240, simulationResolution: 256, renderScale: 1 }),
-  Object.freeze({ id: "dense", label: "Dense water", meshResolution: 240, simulationResolution: 384, renderScale: 1 }),
-  Object.freeze({ id: "long", label: "Wide ocean", meshResolution: 220, simulationResolution: 256, renderScale: 1.1 }),
+  Object.freeze({ id: "balanced", label: "特提斯均衡", meshResolution: 240, simulationResolution: 256, renderScale: 1 }),
+  Object.freeze({ id: "dense", label: "密集水面", meshResolution: 240, simulationResolution: 384, renderScale: 1 }),
+  Object.freeze({ id: "long", label: "广阔海洋", meshResolution: 220, simulationResolution: 256, renderScale: 1.1 }),
 ]);
 
 export function waterTriangleCount(meshResolution: number) {

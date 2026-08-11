@@ -56,12 +56,12 @@ const EMPTY_METRICS: WaterLabMetrics = {
   gpuRenderMeanMs: null,
   gpuRenderP95Ms: null,
   gpuTimestampSamples: 0,
-  adapter: "Requesting WebGPU adapter…",
+  adapter: "正在请求 WebGPU 适配器…",
   error: null,
 };
 
 function formatCount(value: number) {
-  return new Intl.NumberFormat("en", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat("zh-CN", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 2 }).format(value);
 }
 
 export function WebGpuWaterLabExperience() {
@@ -155,39 +155,39 @@ export function WebGpuWaterLabExperience() {
 
   return (
     <main className={`${styles.shell} ${view === "underwater" ? styles.underwaterShell : ""}`}>
-      <canvas ref={canvasRef} className={styles.canvas} aria-label="Raw WebGPU Tethys water biome" />
+      <canvas ref={canvasRef} className={styles.canvas} aria-label="原生 WebGPU 特提斯水体生物群系" />
       {showUi && <aside className={styles.panel}>
-        <p className={styles.eyebrow}>Inkwell renderer experiment</p>
-        <h1>WebGPU Tethys</h1>
-        <p className={styles.intro}>Tethys water, submerged sand, propagated wakes, depth-aware waves, refraction, reflections and caustics in one framework-independent WebGPU renderer.</p>
+        <p className={styles.eyebrow}>Inkwell 渲染器实验</p>
+        <h1>WebGPU 特提斯</h1>
+        <p className={styles.intro}>特提斯水体、水下沙床、传播尾迹、深度感知波浪、折射、反射与焦散，全部集成于一个框架无关的 WebGPU 渲染器中。</p>
 
         <section>
-          <span className={styles.label}>Water path</span>
+          <span className={styles.label}>水体路径</span>
           <div className={styles.segmented}>
-            <button className={mode === "optimized" ? styles.active : ""} onClick={() => setMode("optimized")}>Optimized</button>
-            <button className={mode === "reference" ? styles.active : ""} onClick={() => setMode("reference")}>Reference A/B</button>
+            <button className={mode === "optimized" ? styles.active : ""} onClick={() => setMode("optimized")}>优化路径</button>
+            <button className={mode === "reference" ? styles.active : ""} onClick={() => setMode("reference")}>参考对照 A/B</button>
           </div>
-          <p className={styles.hint}>{mode === "optimized" ? "One compute propagation step and analytic scene refraction/reflection; no duplicate scene captures." : "Two production-style propagation substeps and the wider reflection sampling reference."}</p>
+          <p className={styles.hint}>{mode === "optimized" ? "单次计算传播步 + 解析式场景折射/反射；无重复场景捕获。" : "两个生产级传播子步，以及更宽的反射采样参考实现。"}</p>
         </section>
 
         <section>
-          <span className={styles.label}>Camera medium</span>
+          <span className={styles.label}>相机介质</span>
           <div className={styles.segmented}>
-            <button className={view === "surface" ? styles.active : ""} onClick={() => setView("surface")}>Surface</button>
-            <button className={view === "underwater" ? styles.active : ""} onClick={() => setView("underwater")}>Underwater</button>
-          </div>
-        </section>
-
-        <section>
-          <span className={styles.label}>Validation scene</span>
-          <div className={styles.segmented}>
-            <button className={scene === "open" ? styles.active : ""} onClick={() => setScene("open")}>Open water</button>
-            <button className={scene === "shore" ? styles.active : ""} onClick={() => setScene("shore")}>Island shore</button>
+            <button className={view === "surface" ? styles.active : ""} onClick={() => setView("surface")}>水面上</button>
+            <button className={view === "underwater" ? styles.active : ""} onClick={() => setView("underwater")}>水面下</button>
           </div>
         </section>
 
         <section>
-          <span className={styles.label}>Quality profile</span>
+          <span className={styles.label}>验证场景</span>
+          <div className={styles.segmented}>
+            <button className={scene === "open" ? styles.active : ""} onClick={() => setScene("open")}>开阔水域</button>
+            <button className={scene === "shore" ? styles.active : ""} onClick={() => setScene("shore")}>岛屿海岸</button>
+          </div>
+        </section>
+
+        <section>
+          <span className={styles.label}>质量档位</span>
           <div className={styles.profilePresets}>
             {WATER_PROFILES.map((profile) => <button key={profile.id} onClick={() => applyProfile(profile)}>{profile.label}</button>)}
           </div>
@@ -195,38 +195,38 @@ export function WebGpuWaterLabExperience() {
 
         <section className={styles.sliders}>
           <label>
-            <span>Water mesh <output>{meshResolution}²</output></span>
+            <span>水面网格 <output>{meshResolution}²</output></span>
             <input type="range" min="96" max="320" step="8" value={meshResolution} onChange={(event) => { const value = Number(event.target.value); setMeshResolutionState(value); engineRef.current?.setMeshResolution(value); }} />
           </label>
           <label>
-            <span>Nearshore field <output>{simulationResolution}²</output></span>
+            <span>近岸场 <output>{simulationResolution}²</output></span>
             <input type="range" min="128" max="512" step="64" value={simulationResolution} onChange={(event) => { const value = Number(event.target.value); setSimulationResolutionState(value); engineRef.current?.setSimulationResolution(value); }} />
           </label>
           <label>
-            <span>Render scale <output>{renderScale.toFixed(2)}×</output></span>
+            <span>渲染缩放 <output>{renderScale.toFixed(2)}×</output></span>
             <input type="range" min="0.5" max="1.25" step="0.05" value={renderScale} onChange={(event) => { const value = Number(event.target.value); setRenderScaleState(value); engineRef.current?.setRenderScale(value); }} />
           </label>
         </section>
 
         <dl className={styles.metrics}>
-          <div><dt>Triangles</dt><dd>{formatCount(metrics.triangles)}</dd></div>
-          <div><dt>Nearshore state</dt><dd>{(metrics.simulationBytes / 1_048_576).toFixed(2)} MiB</dd></div>
-          <div><dt>Simulation</dt><dd>{metrics.simulationSubsteps} compute step{metrics.simulationSubsteps === 1 ? "" : "s"}</dd></div>
-          <div><dt>Scene capture</dt><dd>{metrics.sceneCapturePasses} shared</dd></div>
-          <div><dt>Disturbances</dt><dd>{formatCount(metrics.disturbanceCount)}</dd></div>
-          <div><dt>FPS / mean</dt><dd>{metrics.fps.toFixed(0)} · {metrics.frameMeanMs.toFixed(2)}ms</dd></div>
+          <div><dt>三角形数</dt><dd>{formatCount(metrics.triangles)}</dd></div>
+          <div><dt>近岸状态</dt><dd>{(metrics.simulationBytes / 1_048_576).toFixed(2)} MiB</dd></div>
+          <div><dt>模拟</dt><dd>{metrics.simulationSubsteps} 个计算步</dd></div>
+          <div><dt>场景捕获</dt><dd>{metrics.sceneCapturePasses} 次共享</dd></div>
+          <div><dt>扰动数</dt><dd>{formatCount(metrics.disturbanceCount)}</dd></div>
+          <div><dt>帧率 / 平均</dt><dd>{metrics.fps.toFixed(0)} · {metrics.frameMeanMs.toFixed(2)}ms</dd></div>
           <div><dt>p95 / p99</dt><dd>{metrics.frameP95Ms.toFixed(2)} · {metrics.frameP99Ms.toFixed(2)}ms</dd></div>
-          <div><dt>Max / hitches</dt><dd>{metrics.frameMaxMs.toFixed(2)} · {metrics.hitchFrames}</dd></div>
-          <div><dt>JS submit</dt><dd>{metrics.submitMeanMs.toFixed(3)}ms</dd></div>
-          <div><dt>GPU simulation</dt><dd>{metrics.gpuSimulationMeanMs === null ? "—" : `${metrics.gpuSimulationMeanMs.toFixed(3)}ms`}</dd></div>
-          <div><dt>GPU render</dt><dd>{metrics.gpuRenderMeanMs === null ? "—" : `${metrics.gpuRenderMeanMs.toFixed(2)}ms`}</dd></div>
+          <div><dt>最大 / 卡顿</dt><dd>{metrics.frameMaxMs.toFixed(2)} · {metrics.hitchFrames}</dd></div>
+          <div><dt>JS 提交</dt><dd>{metrics.submitMeanMs.toFixed(3)}ms</dd></div>
+          <div><dt>GPU 模拟</dt><dd>{metrics.gpuSimulationMeanMs === null ? "—" : `${metrics.gpuSimulationMeanMs.toFixed(3)}ms`}</dd></div>
+          <div><dt>GPU 渲染</dt><dd>{metrics.gpuRenderMeanMs === null ? "—" : `${metrics.gpuRenderMeanMs.toFixed(2)}ms`}</dd></div>
         </dl>
 
         <p className={styles.adapter}>{metrics.adapter}</p>
-        <p className={styles.controls}>Drag to orbit · wheel to zoom · React owns only this panel</p>
+        <p className={styles.controls}>拖拽旋转视角 · 滚轮缩放 · React 仅负责此面板</p>
       </aside>}
 
-      {(starting || metrics.error) && <div className={styles.status}>{metrics.error ?? "Building Tethys compute fields…"}</div>}
+      {(starting || metrics.error) && <div className={styles.status}>{metrics.error ?? "正在构建特提斯计算场…"}</div>}
       <output id="webgpu-water-lab-qa" data-ready={metrics.ready ? "true" : "false"} hidden>{JSON.stringify(metrics)}</output>
     </main>
   );

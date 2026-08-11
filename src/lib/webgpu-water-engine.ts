@@ -1,5 +1,7 @@
 /// <reference types="@webgpu/types" />
 
+import { ShipRenderer } from "@/lib/ship-renderer";
+import { COLOR_FUNCTIONS, TETHYS_AERIAL_WGSL, WORLD_UNIFORMS } from "@/lib/shared-wgsl";
 import {
   TETHYS_REFERENCE_SIMULATION_RESOLUTION,
   TETHYS_WATER_FIELD_SIZE,
@@ -53,7 +55,51 @@ export type WaterLabMetrics = {
   error: string | null;
 };
 
+// Baseline world extent, and the reference the fog/far-plane scale divides by.
+// The island scene keeps it so its shoreline stays at the authored sampling
+// density: 390 m across a 512-tap terrain field is 0.76 m per texel.
 const TERRAIN_EXTENT = 390;
+// The open ocean sees 10x further. This scales fog reach, the far plane and the
+// water's mesh coverage -- deliberately NOT the terrain field, which stays at
+// 390 m across 512 taps (0.76 m/texel). Stretching the field to match would
+// have dropped it to 7.6 m/texel and flattened the seabed dunes that the
+// underwater camera looks straight at. Past the authored centre the field
+// clamps to its flat -8.5 m border, and water absorption hides the seabed long
+// before that, so the water can extend far beyond the terrain for free.
+const OPEN_WATER_VIEW_SCALE = 10;
+// Orbit ceilings. The island scene keeps the authored 145 m (its camera is
+// pinned to 96 m anyway). The open ocean could otherwise pull back to 1450 m,
+// but the water clipmap is snapped to the camera while the terrain field stays
+// centred on the world: past roughly 400 m of orbit the far side of the terrain
+// emerges from under the water as bare seabed. This was always true -- at the
+// authored 145 m fog close that edge sat behind an opaque wall. Measured: clean
+// at 260 m, a trace at 300 m, obvious by 700 m; 250 m holds a margin under the
+// onset while still reaching well past the old limit.
+const SHORE_MAX_ORBIT = 145;
+const OPEN_WATER_MAX_ORBIT = 250;
+// A glTF hull riding the simulated surface. It is placed near the camera target
+// so the default framing shows it, and offset from the wake impulse at (0, -12)
+// so the two read as separate features.
+const SHIP_MODEL_URL = "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf";
+// The two scenes do not share a seabed: the open ocean's is a submerged shelf
+// while the island scene raises authored dunes above the waterline. A single
+// position would beach the hull in one of them, so each scene gets its own spot
+// in open water, angled so the broadside and bow both read from the camera.
+const SHIP_PLACEMENTS = Object.freeze({
+  open: Object.freeze({
+    centre: Object.freeze([7, -12] as [number, number]),
+    heading: 2.60,
+    // The model's waterline sits at its own origin; this trims how deep it floats.
+    draft: -0.65,
+  }),
+  shore: Object.freeze({
+    // Just outside the island's shelf and inshore of it, so the hull reads
+    // against the dunes instead of being lost beyond the fixed 96 m orbit.
+    centre: Object.freeze([50, 60] as [number, number]),
+    heading: 3.12,
+    draft: -0.65,
+  }),
+});
 const TERRAIN_FIELD_RESOLUTION = 512;
 const FRAME_HISTORY = 360;
 const WORLD_UNIFORM_BYTES = 256;
@@ -65,8 +111,32 @@ const BREAKER_PATCH_ALONG_RESOLUTION = 256;
 const BREAKER_PATCH_ACROSS_RESOLUTION = 48;
 const BREAKER_EVENT_RESOLUTION = 256;
 const BREAKER_PATCH_TRIANGLES = BREAKER_PATCH_ALONG_RESOLUTION * BREAKER_PATCH_ACROSS_RESOLUTION * 2;
+// The travelling localized breaker front. It is a single long crest line that
+// sweeps across the open-ocean domain, so a camera aimed along its tangent sees
+// one continuous ridge spanning the frame. Disabled here; the spectral cascades
+// and the nearshore state keep owning the surface.
+//
+// This gates five coupled sites that must agree, or the surface tears:
+//   1. the adaptive vertex warp that concentrates the grid on the front
+//   2. the crest displacement added to the main water surface
+//   3. the attached 256x48 crest patch geometry
+//   4. the main-surface discard that hands the band over to that patch
+//   5. the patch draw call and its triangle accounting
+// Leaving 4 enabled without 3 punches a transparent hole along the crest band.
+const BREAKER_ENABLED = false;
+const BREAKER_SHADER_GATE = BREAKER_ENABLED ? "1.0" : "0.0";
 const WATER_CLIPMAP_RESOLUTION = 64;
-const WATER_CLIPMAP_LEVELS = 4;
+// Rings are 32 * 2^level metres of half-extent, so the count sets reach while
+// the innermost ring keeps its cell size. Raising the base extent instead
+// would have coarsened the water right under the camera.
+//
+// Eight levels reach 4096 m, well past the 1450 m point where the open-ocean
+// radial fog is already opaque. That headroom is not waste: the rings are
+// snapped to the camera while the terrain field stays centred on the world, so
+// at the 1450 m zoom limit the water must still span the 1950 m terrain radius
+// from an off-centre origin (1450 + 1950 = 3400 m). Falling short of that lets
+// the seabed and the sky show through beyond the water's edge.
+const WATER_CLIPMAP_LEVELS = 8;
 const SPECTRAL_CASCADES = [
   { lengthScale: 240, cutoffLow: 0.024, cutoffHigh: 0.36, amplitudeScale: 0.45, choppiness: 1.18, secondaryScale: 0.22, seed: 0x51f15e },
   { lengthScale: 64, cutoffLow: 0.30, cutoffHigh: 1.42, amplitudeScale: 0.45, choppiness: 1.05, secondaryScale: 0.08, seed: 0x72a93b },
@@ -77,21 +147,6 @@ const SPECTRAL_CASCADES = [
 
 type SpectralFieldPingPong = [[GPUTexture, GPUTexture], [GPUTexture, GPUTexture]];
 
-const WORLD_UNIFORMS = /* wgsl */ `
-struct WorldUniforms {
-  viewProj: mat4x4<f32>,
-  cameraTime: vec4<f32>,
-  cameraRight: vec4<f32>,
-  cameraUp: vec4<f32>,
-  cameraForward: vec4<f32>,
-  sunWater: vec4<f32>,
-  terrain: vec4<f32>,
-  simulation: vec4<f32>,
-  player: vec4<f32>,
-  interaction: vec4<f32>,
-  environment: vec4<f32>,
-}
-`;
 
 const TETHYS_TERRAIN_WGSL = /* wgsl */ `
 fn tethysCoastalShelf(p: vec2<f32>, center: vec2<f32>, radiusScale: vec2<f32>, lift: f32, relief: f32, phase: f32) -> f32 {
@@ -578,65 +633,6 @@ fn inverseFftStage(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 `;
 
-const COLOR_FUNCTIONS = /* wgsl */ `
-fn linearToSrgb(value: vec3<f32>) -> vec3<f32> {
-  return mix(value * 12.92, 1.055 * pow(max(value, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, step(vec3<f32>(0.0031308), value));
-}
-
-fn aces(color: vec3<f32>) -> vec3<f32> {
-  return clamp((color * (2.51 * color + vec3<f32>(0.03))) / (color * (2.43 * color + vec3<f32>(0.59)) + vec3<f32>(0.14)), vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-fn cloudHash3(pInput: vec3<f32>) -> f32 {
-  var p = fract(pInput * 0.1031);
-  p += vec3<f32>(dot(p, p.yzx + vec3<f32>(33.33)));
-  return fract((p.x + p.y) * p.z);
-}
-
-fn cloudNoise3(p: vec3<f32>) -> f32 {
-  let cell = floor(p);
-  var local = fract(p);
-  local = local * local * (vec3<f32>(3.0) - 2.0 * local);
-  let n000 = cloudHash3(cell + vec3<f32>(0.0, 0.0, 0.0));
-  let n100 = cloudHash3(cell + vec3<f32>(1.0, 0.0, 0.0));
-  let n010 = cloudHash3(cell + vec3<f32>(0.0, 1.0, 0.0));
-  let n110 = cloudHash3(cell + vec3<f32>(1.0, 1.0, 0.0));
-  let n001 = cloudHash3(cell + vec3<f32>(0.0, 0.0, 1.0));
-  let n101 = cloudHash3(cell + vec3<f32>(1.0, 0.0, 1.0));
-  let n011 = cloudHash3(cell + vec3<f32>(0.0, 1.0, 1.0));
-  let n111 = cloudHash3(cell + vec3<f32>(1.0, 1.0, 1.0));
-  let nearPlane = mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y);
-  let farPlane = mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y);
-  return mix(nearPlane, farPlane, local.z);
-}
-
-fn skyColor(direction: vec3<f32>, time: f32, sunDirection: vec3<f32>) -> vec3<f32> {
-  let elevation = direction.y;
-  let upper = smoothstep(-0.035, 0.34, elevation);
-  // Lower-energy linear-light values leave headroom for the sun and clouds.
-  // The old near-white dome flattened both the sky and its water reflection.
-  var color = mix(vec3<f32>(0.34, 0.54, 0.64), vec3<f32>(0.070, 0.26, 0.43), upper);
-  color = mix(vec3<f32>(0.055, 0.22, 0.31), color, smoothstep(-0.34, 0.055, elevation));
-  let sunDot = max(dot(direction, sunDirection), 0.0);
-  let horizon = exp(-abs(elevation) * 12.0);
-  color = mix(color, vec3<f32>(0.72, 0.55, 0.31), pow(sunDot, 4.0) * horizon * 0.12);
-  color += vec3<f32>(0.28, 0.42, 0.62) * pow(sunDot, 20.0) * 0.08;
-  let drift = vec3<f32>(time * 0.0040, -time * 0.0014, time * 0.0023);
-  let cloudPoint = direction * 10.5 + drift;
-  let cloudField = cloudNoise3(cloudPoint) * 0.54
-    + cloudNoise3(cloudPoint * 2.03 + vec3<f32>(7.1, -3.4, 5.8)) * 0.29
-    + cloudNoise3(cloudPoint * 4.07 + vec3<f32>(-2.7, 9.3, 1.9)) * 0.17;
-  let envelope = smoothstep(-0.045, 0.018, elevation) * (1.0 - smoothstep(0.30, 0.43, elevation));
-  let cloudBody = smoothstep(0.535, 0.68, cloudField) * envelope;
-  let cloudCore = smoothstep(0.63, 0.78, cloudField) * envelope;
-  let cloudEdge = (smoothstep(0.51, 0.59, cloudField) - smoothstep(0.67, 0.76, cloudField)) * envelope;
-  let cloudShade = mix(vec3<f32>(0.42, 0.50, 0.55), vec3<f32>(0.82, 0.76, 0.63), pow(sunDot, 0.35));
-  color = mix(color, cloudShade, cloudBody * 0.42);
-  color -= vec3<f32>(0.08, 0.10, 0.12) * cloudCore * (1.0 - sunDot) * 0.28;
-  color += vec3<f32>(0.60, 0.49, 0.30) * cloudEdge * sunDot * 0.055;
-  return color;
-}
-`;
 
 const SKY_SHADER = /* wgsl */ `
 ${WORLD_UNIFORMS}
@@ -665,10 +661,17 @@ struct Output { @builtin(position) position: vec4<f32>, @location(0) ndc: vec2<f
 }
 `;
 
+// Shared aerial perspective for both the terrain and water passes. They used to
+// disagree: terrain faded into the horizon while water stayed fully saturated
+// out to its mesh border. At the authored 145 m fog close that border sat well
+// behind the wall and never showed, but in the 10x open ocean the water's edge
+// falls inside the view, so both passes have to fade on identical terms.
+
 const TERRAIN_RENDER_SHADER = /* wgsl */ `
 ${WORLD_UNIFORMS}
 ${TETHYS_TERRAIN_WGSL}
 ${COLOR_FUNCTIONS}
+${TETHYS_AERIAL_WGSL}
 @group(0) @binding(0) var<uniform> uniforms: WorldUniforms;
 @group(0) @binding(1) var terrainField: texture_2d<f32>;
 @group(0) @binding(2) var fieldSampler: sampler;
@@ -784,15 +787,8 @@ struct Output {
   color += vec3<f32>(0.095, 0.105, 0.045) * focusedLight * 0.060 * (1.0 - exposed);
   let distanceToEye = distance(uniforms.cameraTime.xyz, input.world);
   let underwater = uniforms.terrain.w > 0.5;
-  let density = select(0.00155, 0.0075, underwater);
-  var fog = 1.0 - exp(-max(distanceToEye - select(20.0, 2.0, underwater), 0.0) * density);
   let dryLand = exposed * (1.0 - select(0.0, 1.0, underwater));
-  let oceanRadialFog = smoothstep(116.0, 145.0, length(p));
-  let islandRadialFog = smoothstep(166.0, 205.0, length(p)) * 0.58;
-  fog = clamp(fog + mix(oceanRadialFog, islandRadialFog, dryLand), 0.0, mix(0.99, 0.72, dryLand));
-  let waterAerial = select(vec3<f32>(0.42, 0.66, 0.71), vec3<f32>(0.012, 0.205, 0.185), underwater);
-  let aerial = mix(waterAerial, vec3<f32>(0.24, 0.39, 0.43), dryLand);
-  color = mix(color, aerial, fog);
+  color = tethysAerialColor(color, input.world, uniforms.cameraTime.xyz, uniforms.environment.w, underwater, dryLand);
   return vec4<f32>(linearToSrgb(aces(color)), 1.0);
 }
 `;
@@ -825,6 +821,7 @@ override REFERENCE_MODE: bool = false;
 ${WORLD_UNIFORMS}
 ${TETHYS_TERRAIN_WGSL}
 ${COLOR_FUNCTIONS}
+${TETHYS_AERIAL_WGSL}
 @group(0) @binding(0) var<uniform> uniforms: WorldUniforms;
 @group(0) @binding(1) var terrainField: texture_2d<f32>;
 @group(0) @binding(2) var waterState: texture_2d<f32>;
@@ -942,7 +939,7 @@ fn adaptiveBreakerCoordinates(p: vec2<f32>, time: f32) -> vec2<f32> {
   let along = dot(p, tangentDirection);
   let front = breakerFrontPosition(time);
   let domainHalfDiagonal = 276.0;
-  let concentration = 8.2 * breakerFrontVisibility(front) * breakerEventActivation(along);
+  let concentration = 8.2 * breakerFrontVisibility(front) * breakerEventActivation(along) * ${BREAKER_SHADER_GATE};
   let bandWidth = 12.5;
   let correction = -concentration * tanh((across - front) / bandWidth)
     + concentration * across / domainHalfDiagonal;
@@ -975,7 +972,7 @@ fn localizedBreakerDisplacement(p: vec2<f32>, time: f32) -> vec4<f32> {
   let lip = pow(max(crestProfile, 0.0), 3.0) * localEnvelope;
   horizontal += travelDirection * 0.72 * lip * alongVariation;
   let activation = breakerEventActivation(along);
-  return vec4<f32>(horizontal.x, vertical, horizontal.y, lip) * frontVisibility * activation * (1.0 - uniforms.environment.x);
+  return vec4<f32>(horizontal.x, vertical, horizontal.y, lip) * frontVisibility * activation * (1.0 - uniforms.environment.x) * ${BREAKER_SHADER_GATE};
 }
 
 fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
@@ -1103,7 +1100,7 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   let u = across / 9.0;
   let edgeWindow = 1.0 - smoothstep(0.70, 1.24, abs(u));
   let alongWindow = 1.0 - smoothstep(158.0, 176.0, abs(along));
-  let envelope = exp(-0.58 * u * u) * edgeWindow * alongWindow * frontVisibility * breakerEventActivation(along) * (1.0 - uniforms.environment.x);
+  let envelope = exp(-0.58 * u * u) * edgeWindow * alongWindow * frontVisibility * breakerEventActivation(along) * (1.0 - uniforms.environment.x) * ${BREAKER_SHADER_GATE};
   let phase = 3.14159265 * u;
   let alongVariation = 0.86 + 0.14 * sin(along * 0.092 + 1.8);
   let breakup = 0.24 + 0.76 * breakerPatchBreakup(along, time);
@@ -1163,13 +1160,18 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
 }
 
 @fragment fn waterFragment(input: Output) -> @location(0) vec4<f32> {
-  let patchVisible = breakerFrontVisibility(breakerFrontPosition(uniforms.cameraTime.w)) * (1.0 - uniforms.environment.x);
+  let patchVisible = breakerFrontVisibility(breakerFrontPosition(uniforms.cameraTime.w)) * (1.0 - uniforms.environment.x) * ${BREAKER_SHADER_GATE};
   let patchAlong = 1.0 - smoothstep(158.0, 176.0, abs(input.breakerCoord.y));
   if (input.surfaceKind < 0.5 && patchVisible * patchAlong > 0.001 && abs(input.breakerCoord.x) < 11.72) { discard; }
   if (input.surfaceKind > 0.5 && (patchVisible <= 0.001 || abs(input.breakerCoord.x) > 11.82 || patchAlong <= 0.001)) { discard; }
   let state = simulationSample(input.simulationUv);
-  let displacedTerrainUv = input.world.xz / uniforms.terrain.x + vec2<f32>(0.5);
-  if (any(displacedTerrainUv < vec2<f32>(0.0)) || any(displacedTerrainUv > vec2<f32>(1.0))) { discard; }
+  // Clamp rather than discard past the terrain field. The vertex stage already
+  // clamps this same lookup, so discarding here cut the water along the field
+  // border while the surface it was shaded from continued -- invisible when
+  // fog closed at 145 m, but a hard sawtooth edge with bare seabed behind it
+  // once the open ocean reaches 1450 m. Outside the authored centre the field
+  // border is flat -8.5 m seabed, so the clamped depth is the correct one.
+  let displacedTerrainUv = clamp(input.world.xz / uniforms.terrain.x + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
   let terrain = textureSample(terrainField, fieldSampler, displacedTerrainUv);
   // Coverage must be derived from the same displaced surface that produced
   // the raster depth. Re-evaluating height per fragment makes colour and depth
@@ -1298,6 +1300,16 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   if (underwater) {
     let viewDepth = min(distance(uniforms.cameraTime.xyz, input.world), 22.0);
     color = mix(color, vec3<f32>(0.012, 0.205, 0.190), 0.42 + viewDepth / 22.0 * 0.12);
+  }
+  // The water pass carries no aerial term of its own: unfogged water reading
+  // to the horizon is the authored look, and the island scene depends on it.
+  // The 10x open ocean is the exception -- there the surface reaches far enough
+  // that it needs the same fade as the terrain to settle into the horizon.
+  // dryLand is 0 here: this surface is water, never exposed shore.
+  // Underwater is excluded too: that camera is clamped to a ~19 m orbit and
+  // already got its murk from the viewDepth blend just above.
+  if (uniforms.environment.x < 0.5 && !underwater) {
+    color = tethysAerialColor(color, input.world, uniforms.cameraTime.xyz, uniforms.environment.w, false, 0.0);
   }
   return vec4<f32>(linearToSrgb(aces(color)), shorelineCoverage);
 }
@@ -1516,6 +1528,8 @@ export class WebGpuWaterEngine {
   private calmParamBuffer: GPUBuffer | null = null;
   private fieldSampler: GPUSampler | null = null;
   private spectrumSampler: GPUSampler | null = null;
+  private ship: ShipRenderer | null = null;
+  private shipError: string | null = null;
   private terrainComputePipeline: GPUComputePipeline | null = null;
   private simulationPipeline: GPUComputePipeline | null = null;
   private breakerEventPipeline: GPUComputePipeline | null = null;
@@ -1575,7 +1589,7 @@ export class WebGpuWaterEngine {
   private resizeObserver: ResizeObserver | null = null;
   private ready = false;
   private disposed = false;
-  private adapterLabel = "Requesting WebGPU adapter…";
+  private adapterLabel = "正在请求 WebGPU 适配器…";
   private error: string | null = null;
   private disturbanceCount = 0;
   private lastWakeAt = -10;
@@ -1590,17 +1604,17 @@ export class WebGpuWaterEngine {
   }
 
   async init() {
-    if (!navigator.gpu) throw new Error("WebGPU is unavailable. Use a current Chromium browser with hardware acceleration enabled.");
+    if (!navigator.gpu) throw new Error("当前浏览器不支持 WebGPU。请使用较新版本的 Chromium 内核浏览器，并确保已启用硬件加速。");
     this.adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!this.adapter) throw new Error("No WebGPU adapter was available.");
+    if (!this.adapter) throw new Error("未找到可用的 WebGPU 适配器。");
     const requiredFeatures: GPUFeatureName[] = this.adapter.features.has("timestamp-query") ? ["timestamp-query"] : [];
     this.device = await this.adapter.requestDevice({ requiredFeatures });
-    this.device.lost.then((info) => { if (!this.disposed) this.fail(`WebGPU device lost: ${info.message || info.reason}`); });
+    this.device.lost.then((info) => { if (!this.disposed) this.fail(`WebGPU 设备已丢失：${info.message || info.reason}`); });
     this.device.addEventListener("uncapturederror", (event) => this.fail(event.error.message));
     const info = this.adapter.info;
-    this.adapterLabel = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" · ") || "WebGPU adapter";
+    this.adapterLabel = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" · ") || "WebGPU 适配器";
     this.context = this.canvas.getContext("webgpu");
-    if (!this.context) throw new Error("Could not create a WebGPU canvas context.");
+    if (!this.context) throw new Error("无法创建 WebGPU 画布上下文。");
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.context.configure({ device: this.device, format: this.format, alphaMode: "opaque" });
     await this.createResources();
@@ -1613,6 +1627,24 @@ export class WebGpuWaterEngine {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.canvas);
     this.resize();
+    // The hull is optional scenery: a missing or malformed asset must not take
+    // the whole renderer down, so a failure here is surfaced and then skipped.
+    try {
+      this.ship = await ShipRenderer.create({
+        device: this.device,
+        format: this.format,
+        depthFormat: DEPTH_FORMAT,
+        worldUniformBuffer: this.worldUniformBuffer!,
+        longField: this.spectralFields[0][0][0].createView(),
+        mediumField: this.spectralFields[1][0][0].createView(),
+        spectrumSampler: this.spectrumSampler!,
+        cascadeScales: [SPECTRAL_CASCADES[0].lengthScale, SPECTRAL_CASCADES[1].lengthScale],
+        modelUrl: SHIP_MODEL_URL,
+        placement: SHIP_PLACEMENTS[this.options.scene],
+      });
+    } catch (error) {
+      this.shipError = error instanceof Error ? error.message : String(error);
+    }
     this.ready = true;
     this.startTime = performance.now();
     this.lastFrameTime = this.startTime;
@@ -1835,6 +1867,7 @@ export class WebGpuWaterEngine {
   setScene(scene: WaterScene) {
     if (scene === this.options.scene) return;
     this.options.scene = scene;
+    this.ship?.setPlacement(SHIP_PLACEMENTS[scene]);
     this.terrainPrepared = false;
     this.allocateFields();
   }
@@ -1894,7 +1927,10 @@ export class WebGpuWaterEngine {
 
   private onWheel = (event: WheelEvent) => {
     event.preventDefault();
-    this.radius = Math.max(18, Math.min(145, this.radius * Math.exp(event.deltaY * 0.001)));
+    // The near limit is a framing choice and stays fixed; only the pull-back
+    // ceiling changes with the scene.
+    const ceiling = this.options.scene === "shore" ? SHORE_MAX_ORBIT : OPEN_WATER_MAX_ORBIT;
+    this.radius = Math.max(18, Math.min(ceiling, this.radius * Math.exp(event.deltaY * 0.001)));
   };
 
   private resize(force = false) {
@@ -1925,6 +1961,21 @@ export class WebGpuWaterEngine {
     this.referenceWaterSceneBindGroup = sceneGroup(this.referenceWaterPipeline, "Tethys reference water captured scene");
     this.optimizedBreakerSceneBindGroup = sceneGroup(this.optimizedBreakerPatchPipeline, "Tethys optimized breaker captured scene");
     this.referenceBreakerSceneBindGroup = sceneGroup(this.referenceBreakerPatchPipeline, "Tethys reference breaker captured scene");
+    // The cascade textures above are freshly created; the hull samples them for
+    // buoyancy and would otherwise keep views of the destroyed ones.
+    if (this.ship && this.spectrumSampler) {
+      this.ship.bindSpectralFields(
+        this.spectralFields[0][0][0].createView(),
+        this.spectralFields[1][0][0].createView(),
+        this.spectrumSampler,
+      );
+    }
+  }
+
+  // How much further than the authored 145 m this scene can see. The island
+  // scene is a close-range shoreline study and stays at 1.
+  private worldScale() {
+    return this.options.scene === "shore" ? 1 : OPEN_WATER_VIEW_SCALE;
   }
 
   private frameState(timestamp: number) {
@@ -1942,7 +1993,9 @@ export class WebGpuWaterEngine {
     const forward = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
     const right = normalize(cross(forward, [0, 1, 0]));
     const up = normalize(cross(right, forward));
-    const projection = perspective(52 * Math.PI / 180, this.canvas.width / this.canvas.height, 0.12, 560);
+    // The far plane has to clear the radial fog wall, otherwise the 10x world
+    // is clipped before it ever fades out.
+    const projection = perspective(52 * Math.PI / 180, this.canvas.width / this.canvas.height, 0.12, 560 * this.worldScale());
     const view = lookAt(eye, target);
     const playerAngle = this.elapsedSeconds * 0.22;
     const playerPosition: [number, number] = [Math.sin(playerAngle) * 7.5, -18 + Math.cos(playerAngle) * 5.2];
@@ -1953,7 +2006,7 @@ export class WebGpuWaterEngine {
   private writeUniforms(timestamp: number) {
     const device = this.device;
     const buffer = this.worldUniformBuffer;
-    if (!device || !buffer) throw new Error("Tethys uniforms are unavailable.");
+    if (!device || !buffer) throw new Error("特提斯 uniform 缓冲不可用。");
     const frame = this.frameState(timestamp);
     const values = new Float32Array(WORLD_UNIFORM_BYTES / 4);
     values.set(frame.viewProjection, 0);
@@ -1968,7 +2021,7 @@ export class WebGpuWaterEngine {
     values.set([...frame.playerPosition, ...frame.playerVelocity], 44);
     values.set([Math.hypot(...frame.playerVelocity), 1, this.canvas.width, this.canvas.height], 48);
     const validationMesh = this.options.scene === "shore" ? 512 : this.options.meshResolution;
-    values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, 0], 52);
+    values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2041,6 +2094,7 @@ export class WebGpuWaterEngine {
     computePass.setBindGroup(0, this.breakerEventBindGroups[this.activeBreakerEventIndex][this.activeSimulationIndex]);
     computePass.dispatchWorkgroups(Math.ceil(BREAKER_EVENT_RESOLUTION / 64));
     this.activeBreakerEventIndex = 1 - this.activeBreakerEventIndex;
+    this.ship?.updateTransform(computePass);
     computePass.end();
     const shoreScene = this.options.scene === "shore";
     const surfaceView = this.context.getCurrentTexture().createView();
@@ -2057,6 +2111,7 @@ export class WebGpuWaterEngine {
     scenePass.setBindGroup(0, this.terrainBindGroups[this.activeSimulationIndex]);
     const sceneMeshResolution = this.options.scene === "shore" ? 512 : this.options.meshResolution;
     scenePass.draw(sceneMeshResolution * sceneMeshResolution * 6);
+    this.ship?.render(scenePass);
     scenePass.end();
     const renderPass = encoder.beginRenderPass({
       label: "Tethys captured-scene water composite",
@@ -2083,16 +2138,17 @@ export class WebGpuWaterEngine {
     } else {
       renderPass.draw(WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 6, WATER_CLIPMAP_LEVELS);
     }
-    if (this.options.scene === "open" && this.options.mode === "reference") {
+    const drawBreakerPatch = BREAKER_ENABLED && this.options.scene === "open";
+    if (drawBreakerPatch && this.options.mode === "reference") {
       renderPass.setPipeline(this.referenceBreakerPatchPipeline);
       renderPass.setBindGroup(0, this.referenceBreakerPatchBindGroups[this.activeSimulationIndex][this.activeBreakerEventIndex]);
       renderPass.setBindGroup(1, this.referenceBreakerSceneBindGroup);
-    } else if (this.options.scene === "open") {
+    } else if (drawBreakerPatch) {
       renderPass.setPipeline(this.optimizedBreakerPatchPipeline);
       renderPass.setBindGroup(0, this.optimizedBreakerPatchBindGroups[this.activeSimulationIndex][this.activeBreakerEventIndex]);
       renderPass.setBindGroup(1, this.optimizedBreakerSceneBindGroup);
     }
-    if (this.options.scene === "open") renderPass.draw(BREAKER_PATCH_ALONG_RESOLUTION * BREAKER_PATCH_ACROSS_RESOLUTION * 6);
+    if (drawBreakerPatch) renderPass.draw(BREAKER_PATCH_ALONG_RESOLUTION * BREAKER_PATCH_ACROSS_RESOLUTION * 6);
     renderPass.end();
     if (measureGpu && this.querySet && this.queryResolve && this.queryReadback) {
       encoder.resolveQuerySet(this.querySet, 0, 4, this.queryResolve, 0);
@@ -2132,12 +2188,13 @@ export class WebGpuWaterEngine {
       view: this.options.view,
       meshResolution: this.options.meshResolution,
       simulationResolution: this.options.simulationResolution,
-      triangles: this.options.scene === "shore"
+      triangles: (this.options.scene === "shore"
         ? 512 * 512 * 4
         : this.options.meshResolution * this.options.meshResolution * 2
           + WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 2
           + (WATER_CLIPMAP_LEVELS - 1) * WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 1.5
-          + BREAKER_PATCH_TRIANGLES,
+          + (BREAKER_ENABLED ? BREAKER_PATCH_TRIANGLES : 0))
+        + (this.ship?.triangleCount ?? 0),
       simulationBytes: waterSimulationBytes(this.options.simulationResolution),
       simulationSubsteps: this.options.mode === "reference" ? 2 : 1,
       sceneCapturePasses: this.options.scene === "shore" ? 1 : 0,
@@ -2155,7 +2212,7 @@ export class WebGpuWaterEngine {
       gpuRenderMeanMs: this.gpuRenderTimes.length ? mean(this.gpuRenderTimes) : null,
       gpuRenderP95Ms: this.gpuRenderTimes.length ? percentile(this.gpuRenderTimes, 0.95) : null,
       gpuTimestampSamples: Math.min(this.gpuSimulationTimes.length, this.gpuRenderTimes.length),
-      adapter: this.adapterLabel,
+      adapter: this.shipError ? `${this.adapterLabel} · 船体加载失败: ${this.shipError}` : this.adapterLabel,
       error: this.error,
     };
   }
@@ -2187,6 +2244,8 @@ export class WebGpuWaterEngine {
     this.querySet?.destroy();
     this.queryResolve?.destroy();
     this.queryReadback?.destroy();
+    this.ship?.dispose();
+    this.ship = null;
   }
 }
 
