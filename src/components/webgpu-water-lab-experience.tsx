@@ -24,6 +24,8 @@ type BenchmarkBridge = {
   setSimulationResolution: (resolution: number) => void;
   setRenderScale: (scale: number) => void;
   setWaveScale: (scale: number) => void;
+  setDistantRoughness: (value: number) => void;
+  setDetailRange: (value: number) => void;
   resetMetrics: () => void;
 };
 
@@ -40,6 +42,8 @@ const EMPTY_METRICS: WaterLabMetrics = {
   meshResolution: 240,
   simulationResolution: 256,
   waveScale: 1,
+  distantRoughness: 0,
+  detailRange: 1,
   triangles: 230_400,
   simulationBytes: 1_048_576,
   simulationSubsteps: 1,
@@ -76,6 +80,8 @@ export function WebGpuWaterLabExperience() {
   const [simulationResolution, setSimulationResolutionState] = useState(256);
   const [renderScale, setRenderScaleState] = useState(1);
   const [waveScale, setWaveScaleState] = useState(1);
+  const [distantRoughness, setDistantRoughnessState] = useState(0);
+  const [detailRange, setDetailRangeState] = useState(1);
   const [metrics, setMetrics] = useState<WaterLabMetrics>(EMPTY_METRICS);
   const [starting, setStarting] = useState(true);
   const [showUi, setShowUi] = useState(true);
@@ -91,6 +97,8 @@ export function WebGpuWaterLabExperience() {
     const requestedSimulation = Math.max(64, Math.min(512, Number(query.get("simulation")) || 256));
     const requestedScale = Math.max(0.5, Math.min(1.25, Number(query.get("scale")) || 1));
     const requestedWaves = Math.max(0.15, Math.min(1.6, Number(query.get("waves")) || 1));
+    const requestedRoughness = Math.max(0, Math.min(3, Number(query.get("farRough")) || 0));
+    const requestedDetail = Math.max(0.4, Math.min(8, Number(query.get("detail")) || 1));
     const requestedFixedTime = Number(query.get("fixedTime"));
     const fixedTime = query.has("fixedTime") && Number.isFinite(requestedFixedTime) ? requestedFixedTime : undefined;
     const requestedYaw = Number(query.get("yaw"));
@@ -106,6 +114,8 @@ export function WebGpuWaterLabExperience() {
     setSimulationResolutionState(requestedSimulation);
     setRenderScaleState(requestedScale);
     setWaveScaleState(requestedWaves);
+    setDistantRoughnessState(requestedRoughness);
+    setDetailRangeState(requestedDetail);
     const engine = new WebGpuWaterEngine(canvas, {
       mode: requestedMode,
       view: requestedView,
@@ -114,6 +124,8 @@ export function WebGpuWaterLabExperience() {
       simulationResolution: requestedSimulation,
       renderScale: requestedScale,
       waveScale: requestedWaves,
+      distantRoughness: requestedRoughness,
+      detailRange: requestedDetail,
       fixedTime,
       benchmark,
       cameraYaw,
@@ -130,6 +142,8 @@ export function WebGpuWaterLabExperience() {
       setSimulationResolution: (value) => { engine.setSimulationResolution(value); setSimulationResolutionState(value); },
       setRenderScale: (value) => { engine.setRenderScale(value); setRenderScaleState(value); },
       setWaveScale: (value) => { engine.setWaveScale(value); setWaveScaleState(value); },
+      setDistantRoughness: (value) => { engine.setDistantRoughness(value); setDistantRoughnessState(value); },
+      setDetailRange: (value) => { engine.setDetailRange(value); setDetailRangeState(value); },
       resetMetrics: () => engine.resetMetrics(),
     };
     void engine.init().then(() => {
@@ -212,6 +226,14 @@ export function WebGpuWaterLabExperience() {
           <label>
             <span>浪高 <output>{waveScale.toFixed(2)}×</output></span>
             <input type="range" min="0.15" max="1.6" step="0.05" value={waveScale} onChange={(event) => { const value = Number(event.target.value); setWaveScaleState(value); engineRef.current?.setWaveScale(value); }} />
+          </label>
+          <label>
+            <span>细节距离 <output>{(detailRange * 118).toFixed(0)}m</output></span>
+            <input type="range" min="0.4" max="8" step="0.1" value={detailRange} onChange={(event) => { const value = Number(event.target.value); setDetailRangeState(value); engineRef.current?.setDetailRange(value); }} />
+          </label>
+          <label>
+            <span>远景粗糙度 <output>{distantRoughness.toFixed(2)}</output></span>
+            <input type="range" min="0" max="3" step="0.05" value={distantRoughness} onChange={(event) => { const value = Number(event.target.value); setDistantRoughnessState(value); engineRef.current?.setDistantRoughness(value); }} />
           </label>
           <label>
             <span>渲染缩放 <output>{renderScale.toFixed(2)}×</output></span>

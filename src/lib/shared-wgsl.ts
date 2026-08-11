@@ -17,7 +17,9 @@ struct WorldUniforms {
   interaction: vec4<f32>,
   environment: vec4<f32>,
   // x: swell amplitude multiplier, y: its square (for the bound-harmonic mean
-  // terms, which are quadratic in wave height). z, w: reserved.
+  // terms, which are quadratic in wave height). z: how much of the faded-out
+  // capillary slope is returned to BRDF roughness. w: multiplier on the
+  // distance over which surface detail survives.
   waves: vec4<f32>,
 }
 `;

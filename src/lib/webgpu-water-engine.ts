@@ -21,6 +21,8 @@ export type WaterLabOptions = {
   simulationResolution: number;
   renderScale: number;
   waveScale: number;
+  distantRoughness: number;
+  detailRange: number;
   fixedTime?: number;
   benchmark?: boolean;
   cameraYaw?: number;
@@ -35,6 +37,8 @@ export type WaterLabMetrics = {
   meshResolution: number;
   simulationResolution: number;
   waveScale: number;
+  distantRoughness: number;
+  detailRange: number;
   triangles: number;
   simulationBytes: number;
   simulationSubsteps: number;
@@ -86,6 +90,12 @@ const OPEN_WATER_MAX_ORBIT = 250;
 // slope for the BRDF to work with and the ocean turns into a mirror.
 const MIN_WAVE_SCALE = 0.15;
 const MAX_WAVE_SCALE = 1.6;
+// How much of the faded capillary slope is returned to BRDF roughness.
+// 0 reproduces the original look, where the far surface tends toward a mirror.
+const MAX_DISTANT_ROUGHNESS = 3;
+// Multiplier on the 42-118 m capillary fade and the 95-188 m crest fade.
+const MIN_DETAIL_RANGE = 0.4;
+const MAX_DETAIL_RANGE = 8;
 
 const SHIP_MODEL_URL = "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf";
 // The two scenes do not share a seabed: the open ocean's is a submerged shelf
@@ -889,7 +899,7 @@ fn smithVisibility(cosine: f32, meanSquareSlope: f32) -> f32 {
   return 2.0 / (1.0 + sqrt(1.0 + meanSquareSlope * tangentSquared));
 }
 
-fn oceanSunGlitter(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>) -> f32 {
+fn oceanSunGlitter(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, extraVariance: f32) -> f32 {
   let ndv = max(dot(N, V), 0.001);
   let ndl = max(dot(N, L), 0.001);
   let H = normalize(V + L);
@@ -899,13 +909,16 @@ fn oceanSunGlitter(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>) -> f32 {
   let B = normalize(cross(N, T));
   let alongSlope = dot(H, T) / ndh;
   let acrossSlope = dot(H, B) / ndh;
-  // Cox-Munk clean-sea mean-square slopes at an 11.5 m/s wind.
-  let alongVariance = 0.0363;
-  let acrossVariance = 0.0251;
+  // Cox-Munk clean-sea mean-square slopes at an 11.5 m/s wind. extraVariance
+  // carries the capillary slope that distance faded out of the normal: this
+  // distribution is exactly where sub-resolution slope belongs, so returning it
+  // here broadens the glitter instead of letting the far water go mirror-flat.
+  let alongVariance = 0.0363 + extraVariance;
+  let acrossVariance = 0.0251 + extraVariance;
   let slopePdf = exp(-0.5 * (alongSlope * alongSlope / alongVariance + acrossSlope * acrossSlope / acrossVariance))
     / (6.2831853 * sqrt(alongVariance * acrossVariance));
   let facetDistribution = slopePdf / max(ndh * ndh * ndh * ndh, 0.0001);
-  let visibility = smithVisibility(ndv, 0.0307) * smithVisibility(ndl, 0.0307);
+  let visibility = smithVisibility(ndv, 0.0307 + extraVariance) * smithVisibility(ndl, 0.0307 + extraVariance);
   return dielectricFresnel(max(dot(V, H), 0.0)) * facetDistribution * visibility / max(4.0 * ndv, 0.001);
 }
 
@@ -1197,13 +1210,28 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   let shortUv = fract(p / ${SPECTRAL_CASCADES[2].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let short0 = textureSample(shortField0, spectrumSampler, shortUv);
   let short1 = textureSample(shortField1, spectrumSampler, shortUv);
-  let shortDistanceFade = 1.0 - smoothstep(42.0, 118.0, distance(uniforms.cameraTime.xyz, input.world));
+  // Capillary detail is dropped with distance because sub-pixel waves alias
+  // into crawling highlights. The range is a quality/stability trade-off rather
+  // than a constant, so it is exposed: raising it keeps texture further out at
+  // the cost of shimmer, lowering it calms the horizon sooner.
+  let detailRange = uniforms.waves.w;
+  let shortDistanceFade = 1.0 - smoothstep(42.0 * detailRange, 118.0 * detailRange, distance(uniforms.cameraTime.xyz, input.world));
   let shortSlope = short1.rg * shortDistanceFade;
   // Short waves become an aggregate slope distribution instead of a literal
   // high-frequency normal texture. This is the geometry-to-BRDF transition
   // used to avoid sparkling/streaking as sub-pixel waves recede.
   var N = normalize(input.normal + vec3<f32>(-shortSlope.x, 0.0, -shortSlope.y) * 0.42);
-  let surfaceRoughness = mix(0.035, 0.115, smoothstep(0.012, 0.30, length(shortSlope)));
+  // Fading the capillary slope out of the normal is what stops sub-pixel waves
+  // from sparkling, but on its own it also drains the roughness that those
+  // waves represent, so the far surface collapses toward a mirror. Feed the
+  // discarded slope back in as an aggregate statistic instead: the normal stays
+  // smooth while the BRDF keeps the energy. At 0 this is the original
+  // behaviour; at 1 the full variance is retained.
+  // Variance is the square of slope, and it is what the Cox-Munk distribution
+  // in oceanSunGlitter consumes.
+  let fadedSlope = length(short1.rg) * (1.0 - shortDistanceFade);
+  let recoveredVariance = fadedSlope * fadedSlope * uniforms.waves.z;
+  let surfaceRoughness = mix(0.035, 0.115, smoothstep(0.012, 0.30, length(shortSlope) + fadedSlope * uniforms.waves.z));
   let underwater = uniforms.terrain.w > 0.5;
   if (underwater) { N *= -1.0; }
   let V = normalize(uniforms.cameraTime.xyz - input.world);
@@ -1248,6 +1276,20 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
     let blurB = skyColor(normalize(reflectedDirection - vec3<f32>(0.010, 0.004, -0.012)), time, L);
     reflected = reflected * 0.64 + blurA * 0.18 + blurB * 0.18;
   }
+  // Sub-resolution slope scatters the mirror direction into a cone. Broadening
+  // the glitter lobe alone barely shows, because away from the sun's reflection
+  // the far surface is dominated by this sky term -- and a single tap makes it
+  // a perfect mirror no matter how rough the water statistically is. Cost is
+  // only paid where the control is engaged; at 0 the whole branch is skipped.
+  let reflectionSpread = sqrt(recoveredVariance) * 1.9;
+  if (reflectionSpread > 0.002) {
+    let spreadT = normalize(cross(reflectedDirection, vec3<f32>(0.0, 1.0, 0.0)) + vec3<f32>(1e-4, 0.0, 1e-4));
+    let spreadB = cross(reflectedDirection, spreadT);
+    let tapA = skyColor(normalize(reflectedDirection + spreadT * reflectionSpread), time, L);
+    let tapB = skyColor(normalize(reflectedDirection - spreadT * 0.55 * reflectionSpread + spreadB * 0.84 * reflectionSpread), time, L);
+    let tapC = skyColor(normalize(reflectedDirection - spreadT * 0.55 * reflectionSpread - spreadB * 0.84 * reflectionSpread), time, L);
+    reflected = reflected * 0.40 + (tapA + tapB + tapC) * 0.20;
+  }
   // Preserve environment contrast.  Tinting the reflection toward the water
   // body colour was the main source of the previous milky/plastic response.
   reflected *= mix(vec3<f32>(0.70, 0.77, 0.80), vec3<f32>(0.76, 0.81, 0.83), surfaceRoughness);
@@ -1281,7 +1323,7 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
     + valueNoise(p * 1.41 + vec2<f32>(-time * 0.043, time * 0.032)) * 0.30
     + valueNoise(p * 3.7 + vec2<f32>(time * 0.081, -time * 0.066)) * 0.15;
   let crestBreakup = smoothstep(0.60, 0.80, crestVariation);
-  let crestDistanceFade = 1.0 - smoothstep(95.0, 188.0, distance(uniforms.cameraTime.xyz, input.world));
+  let crestDistanceFade = 1.0 - smoothstep(95.0 * detailRange, 188.0 * detailRange, distance(uniforms.cameraTime.xyz, input.world));
   let breakerBreakup = smoothstep(0.43, 0.62, crestVariation);
   let breakerFoam = smoothstep(0.24, 0.72, input.breakerLip) * breakerBreakup * crestDistanceFade;
   let whitecap = max(crestHeight * pow(crestPinch, 4.0) * crestBreakup, breakerFoam * 0.78) * crestDistanceFade;
@@ -1302,7 +1344,7 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   foam = select(visibleFoam, 0.0, underwater);
   let foamCoverage = max(clamp(foam * 0.21, 0.0, 0.145), breakerFoam * 0.22);
   color = mix(color, vec3<f32>(0.80, 0.88, 0.84), clamp(foamCoverage, 0.0, 0.22));
-  let sunGlitter = oceanSunGlitter(N, V, L);
+  let sunGlitter = oceanSunGlitter(N, V, L, recoveredVariance);
   color += vec3<f32>(1.0, 0.91, 0.70) * min(sunGlitter * 0.070, 0.34) * select(1.0, 0.08, underwater);
   if (underwater) {
     let viewDepth = min(distance(uniforms.cameraTime.xyz, input.world), 22.0);
@@ -1889,6 +1931,12 @@ export class WebGpuWaterEngine {
   setWaveScale(value: number) {
     this.options.waveScale = Math.max(MIN_WAVE_SCALE, Math.min(MAX_WAVE_SCALE, Number.isFinite(value) ? value : 1));
   }
+  setDistantRoughness(value: number) {
+    this.options.distantRoughness = Math.max(0, Math.min(MAX_DISTANT_ROUGHNESS, Number.isFinite(value) ? value : 0));
+  }
+  setDetailRange(value: number) {
+    this.options.detailRange = Math.max(MIN_DETAIL_RANGE, Math.min(MAX_DETAIL_RANGE, Number.isFinite(value) ? value : 1));
+  }
 
   resetMetrics() {
     this.frameTimes.length = 0;
@@ -2033,7 +2081,7 @@ export class WebGpuWaterEngine {
     const validationMesh = this.options.scene === "shore" ? 512 : this.options.meshResolution;
     values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
     const waveScale = this.options.waveScale;
-    values.set([waveScale, waveScale * waveScale, 0, 0], 56);
+    values.set([waveScale, waveScale * waveScale, this.options.distantRoughness, this.options.detailRange], 56);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2201,6 +2249,8 @@ export class WebGpuWaterEngine {
       meshResolution: this.options.meshResolution,
       simulationResolution: this.options.simulationResolution,
       waveScale: this.options.waveScale,
+      distantRoughness: this.options.distantRoughness,
+      detailRange: this.options.detailRange,
       triangles: (this.options.scene === "shore"
         ? 512 * 512 * 4
         : this.options.meshResolution * this.options.meshResolution * 2
