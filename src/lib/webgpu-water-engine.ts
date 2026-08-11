@@ -269,13 +269,19 @@ fn terrainHeight(p: vec2<f32>, shoreMix: f32) -> f32 {
   let borderFade = 1.0 - smoothstep(245.0, 258.0, max(abs(p.x), abs(p.y)));
   var shaped = mix(seabed, height, shoreMix * borderFade);
   // The authored shelves skirt every island with a 4-6 m bank that reads as a
-  // hard green/blue split from above. Remap everything below the waterline
-  // toward the deep floor (the curve is identity at the waterline and at
-  // -8.5 m, and pushes mid-depths down), so land above water is untouched but
-  // the islands rise from open blue water instead of a turquoise plateau.
-  let submergedRatio = clamp((${TETHYS_WATER_LEVEL.toFixed(1)} - shaped) / ${(TETHYS_WATER_LEVEL + 8.5).toFixed(1)}, 0.0, 1.0);
-  let plunged = ${TETHYS_WATER_LEVEL.toFixed(1)} - ${(TETHYS_WATER_LEVEL + 8.5).toFixed(1)} * pow(submergedRatio, 0.35);
-  shaped = select(shaped, plunged, shaped < ${TETHYS_WATER_LEVEL.toFixed(1)});
+  // hard green/blue split from above. Below a narrow swash shelf the heights
+  // are remapped toward the deep floor (identity at the pivot and at -8.5 m,
+  // mid-depths pushed down), so the islands rise from open blue water instead
+  // of a turquoise plateau. The pivot sits 3.9 m under the waterline rather
+  // than at it: that band keeps the authored gentle slope, which is what
+  // shallowAttenuation needs to bleed the swell off before it reaches the
+  // beach -- plunging straight from the waterline sent full-height waves into
+  // a near-vertical shore, and their vertex-rate crests read as sawtooth
+  // triangles climbing the sand.
+  let shelfPivot = -2.5;
+  let submergedRatio = clamp((shelfPivot - shaped) / 6.0, 0.0, 1.0);
+  let plunged = shelfPivot - 6.0 * pow(submergedRatio, 0.35);
+  shaped = select(shaped, plunged, shaped < shelfPivot);
   return mix(-8.5, shaped, borderFade);
 }
 
