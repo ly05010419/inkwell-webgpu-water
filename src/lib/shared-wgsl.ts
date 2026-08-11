@@ -21,6 +21,8 @@ struct WorldUniforms {
   // capillary slope is returned to BRDF roughness. w: multiplier on the
   // distance over which surface detail survives.
   waves: vec4<f32>,
+  // x: multiplier on where the open ocean's radial fog closes; 0 disables it.
+  atmosphere: vec4<f32>,
 }
 `;
 
@@ -93,7 +95,16 @@ fn tethysAerialColor(color: vec3<f32>, world: vec3<f32>, cameraPos: vec3<f32>, w
   let density = select(0.00155 / worldScale, 0.0075, underwater);
   var fog = 1.0 - exp(-max(distanceToEye - select(20.0 * worldScale, 2.0, underwater), 0.0) * density);
   let radial = length(world.xz);
-  let oceanRadialFog = smoothstep(116.0 * worldScale, 145.0 * worldScale, radial);
+  // The open ocean's radial wall is adjustable and off by default. It never
+  // modelled atmosphere -- it concealed the far edge of a finite water mesh --
+  // so turning it off buys view distance at the cost of exposing that edge when
+  // the camera is pulled back. The island scene keeps its own unconditionally,
+  // where the ring bounds an authored world rather than hiding an artifact.
+  let fogReach = uniforms.atmosphere.x;
+  let oceanRadialFog = select(
+    smoothstep(116.0 * worldScale * fogReach, 145.0 * worldScale * fogReach, radial),
+    0.0,
+    fogReach <= 0.0);
   let islandRadialFog = smoothstep(166.0 * worldScale, 205.0 * worldScale, radial) * 0.58;
   fog = clamp(fog + mix(oceanRadialFog, islandRadialFog, dryLand), 0.0, mix(0.99, 0.72, dryLand));
   let waterAerial = select(vec3<f32>(0.42, 0.66, 0.71), vec3<f32>(0.012, 0.205, 0.185), underwater);

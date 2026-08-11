@@ -23,6 +23,7 @@ export type WaterLabOptions = {
   waveScale: number;
   distantRoughness: number;
   detailRange: number;
+  fogReach: number;
   fixedTime?: number;
   benchmark?: boolean;
   cameraYaw?: number;
@@ -39,6 +40,7 @@ export type WaterLabMetrics = {
   waveScale: number;
   distantRoughness: number;
   detailRange: number;
+  fogReach: number;
   triangles: number;
   simulationBytes: number;
   simulationSubsteps: number;
@@ -72,7 +74,7 @@ const TERRAIN_EXTENT = 390;
 // underwater camera looks straight at. Past the authored centre the field
 // clamps to its flat -8.5 m border, and water absorption hides the seabed long
 // before that, so the water can extend far beyond the terrain for free.
-const OPEN_WATER_VIEW_SCALE = 10;
+const OPEN_WATER_VIEW_SCALE = 100;
 // Orbit ceilings. The island scene keeps the authored 145 m (its camera is
 // pinned to 96 m anyway). The open ocean could otherwise pull back to 1450 m,
 // but the water clipmap is snapped to the camera while the terrain field stays
@@ -96,6 +98,9 @@ const MAX_DISTANT_ROUGHNESS = 3;
 // Multiplier on the 42-118 m capillary fade and the 95-188 m crest fade.
 const MIN_DETAIL_RANGE = 0.4;
 const MAX_DETAIL_RANGE = 8;
+// Where the open ocean's radial fog closes, relative to its authored position.
+// 0 removes it entirely, which is the default.
+const MAX_FOG_REACH = 3;
 
 const SHIP_MODEL_URL = "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf";
 // The two scenes do not share a seabed: the open ocean's is a submerged shelf
@@ -147,13 +152,24 @@ const WATER_CLIPMAP_RESOLUTION = 64;
 // the innermost ring keeps its cell size. Raising the base extent instead
 // would have coarsened the water right under the camera.
 //
-// Eight levels reach 4096 m, well past the 1450 m point where the open-ocean
-// radial fog is already opaque. That headroom is not waste: the rings are
+// Ten levels reach 16384 m, past the 14500 m point where the open-ocean radial
+// fog is already opaque. That headroom is not waste: the rings are
 // snapped to the camera while the terrain field stays centred on the world, so
 // at the 1450 m zoom limit the water must still span the 1950 m terrain radius
 // from an off-centre origin (1450 + 1950 = 3400 m). Falling short of that lets
 // the seabed and the sky show through beyond the water's edge.
-const WATER_CLIPMAP_LEVELS = 8;
+const WATER_CLIPMAP_LEVELS = 10;
+// Where the outermost ring's edge vertices are thrown to, in metres. Two hard
+// bounds: it must exceed the outermost ring (16384 m) or the skirt would pull
+// geometry inward, and its depth must stay in front of the sky, which writes
+// 0.999999. With near 0.12 m and the far plane below, 20 km satisfies both.
+const WATER_HORIZON_REACH = 20000;
+// The open ocean's far plane is fixed rather than scaled: it has to clear the
+// skirt regardless of view scale, and pushing it further only costs depth
+// precision. The island scene keeps the authored 560 m, where its waterline
+// needs the precision and nothing is drawn beyond a few hundred metres.
+const OPEN_WATER_FAR_PLANE = 50000;
+const SHORE_FAR_PLANE = 560;
 const SPECTRAL_CASCADES = [
   { lengthScale: 240, cutoffLow: 0.024, cutoffHigh: 0.36, amplitudeScale: 0.45, choppiness: 1.18, secondaryScale: 0.22, seed: 0x51f15e },
   { lengthScale: 64, cutoffLow: 0.30, cutoffHigh: 1.42, amplitudeScale: 0.45, choppiness: 1.05, secondaryScale: 0.08, seed: 0x72a93b },
@@ -1064,6 +1080,7 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
     vec2<u32>(0u, 1u), vec2<u32>(1u, 1u), vec2<u32>(1u, 0u)
   );
   let shoreScene = uniforms.environment.x > 0.5;
+  var onHorizonSkirt = false;
   let resolution = select(${WATER_CLIPMAP_RESOLUTION}u, u32(uniforms.environment.z), shoreScene);
   let cellId = vertexId / 6u;
   let cell = vec2<u32>(cellId % resolution, cellId / resolution);
@@ -1085,6 +1102,20 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
         baseP = vec2<f32>(10000.0);
       }
     }
+    // The rings are a finite square, so their outer edge is a visible cut
+    // wherever fog does not reach it. Push the outermost ring of vertices out
+    // to the horizon: the last row of quads becomes a skirt that closes the gap
+    // to the skyline. Those triangles are enormous but land within a few pixels
+    // of the horizon, where the surface is far below one sample per wave
+    // anyway. Without this, removing the fog wall just exposes the cut.
+    if (instanceId == ${WATER_CLIPMAP_LEVELS - 1}u) {
+      onHorizonSkirt = grid.x == 0u || grid.x == resolution || grid.y == 0u || grid.y == resolution;
+      if (onHorizonSkirt) {
+        let outward = baseP - snappedCamera;
+        let reach = max(abs(outward.x), abs(outward.y));
+        baseP = snappedCamera + outward * (${WATER_HORIZON_REACH}.0 / max(reach, 1.0));
+      }
+    }
   }
   let coordinateStep = 0.55;
   let p = adaptiveBreakerCoordinates(baseP, uniforms.cameraTime.w);
@@ -1095,7 +1126,14 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
   let tangentZ = surface.tangentPX * pDz.x + surface.tangentPZ * pDz.y;
   let breakerCoord = breakerCoordinates(p, uniforms.cameraTime.w);
   var output: Output;
-  output.position = uniforms.viewProj * vec4<f32>(surface.world, 1.0);
+  if (onHorizonSkirt) {
+    let towardHorizon = surface.world - uniforms.cameraTime.xyz;
+    var horizonClip = uniforms.viewProj * vec4<f32>(towardHorizon, 0.0);
+    horizonClip.z = horizonClip.w * 0.99999;
+    output.position = horizonClip;
+  } else {
+    output.position = uniforms.viewProj * vec4<f32>(surface.world, 1.0);
+  }
   output.world = surface.world;
   output.normal = normalize(cross(tangentZ, tangentX));
   output.fieldUv = surface.fieldUv;
@@ -1947,6 +1985,9 @@ export class WebGpuWaterEngine {
   setDetailRange(value: number) {
     this.options.detailRange = Math.max(MIN_DETAIL_RANGE, Math.min(MAX_DETAIL_RANGE, Number.isFinite(value) ? value : 1));
   }
+  setFogReach(value: number) {
+    this.options.fogReach = Math.max(0, Math.min(MAX_FOG_REACH, Number.isFinite(value) ? value : 0));
+  }
 
   resetMetrics() {
     this.frameTimes.length = 0;
@@ -2061,9 +2102,8 @@ export class WebGpuWaterEngine {
     const forward = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
     const right = normalize(cross(forward, [0, 1, 0]));
     const up = normalize(cross(right, forward));
-    // The far plane has to clear the radial fog wall, otherwise the 10x world
-    // is clipped before it ever fades out.
-    const projection = perspective(52 * Math.PI / 180, this.canvas.width / this.canvas.height, 0.12, 560 * this.worldScale());
+    const farPlane = this.options.scene === "shore" ? SHORE_FAR_PLANE : OPEN_WATER_FAR_PLANE;
+    const projection = perspective(52 * Math.PI / 180, this.canvas.width / this.canvas.height, 0.12, farPlane);
     const view = lookAt(eye, target);
     const playerAngle = this.elapsedSeconds * 0.22;
     const playerPosition: [number, number] = [Math.sin(playerAngle) * 7.5, -18 + Math.cos(playerAngle) * 5.2];
@@ -2092,6 +2132,7 @@ export class WebGpuWaterEngine {
     values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
     const waveScale = this.options.waveScale;
     values.set([waveScale, waveScale * waveScale, this.options.distantRoughness, this.options.detailRange], 56);
+    values.set([this.options.scene === "shore" ? 1 : this.options.fogReach, 0, 0, 0], 60);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2261,6 +2302,7 @@ export class WebGpuWaterEngine {
       waveScale: this.options.waveScale,
       distantRoughness: this.options.distantRoughness,
       detailRange: this.options.detailRange,
+      fogReach: this.options.fogReach,
       triangles: (this.options.scene === "shore"
         ? 512 * 512 * 4
         : this.options.meshResolution * this.options.meshResolution * 2
