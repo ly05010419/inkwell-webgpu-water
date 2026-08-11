@@ -16,6 +16,9 @@ struct WorldUniforms {
   player: vec4<f32>,
   interaction: vec4<f32>,
   environment: vec4<f32>,
+  // x: swell amplitude multiplier, y: its square (for the bound-harmonic mean
+  // terms, which are quadratic in wave height). z, w: reserved.
+  waves: vec4<f32>,
 }
 `;
 

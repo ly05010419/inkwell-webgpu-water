@@ -23,6 +23,7 @@ type BenchmarkBridge = {
   setMeshResolution: (resolution: number) => void;
   setSimulationResolution: (resolution: number) => void;
   setRenderScale: (scale: number) => void;
+  setWaveScale: (scale: number) => void;
   resetMetrics: () => void;
 };
 
@@ -38,6 +39,7 @@ const EMPTY_METRICS: WaterLabMetrics = {
   view: "surface",
   meshResolution: 240,
   simulationResolution: 256,
+  waveScale: 1,
   triangles: 230_400,
   simulationBytes: 1_048_576,
   simulationSubsteps: 1,
@@ -73,6 +75,7 @@ export function WebGpuWaterLabExperience() {
   const [meshResolution, setMeshResolutionState] = useState(240);
   const [simulationResolution, setSimulationResolutionState] = useState(256);
   const [renderScale, setRenderScaleState] = useState(1);
+  const [waveScale, setWaveScaleState] = useState(1);
   const [metrics, setMetrics] = useState<WaterLabMetrics>(EMPTY_METRICS);
   const [starting, setStarting] = useState(true);
   const [showUi, setShowUi] = useState(true);
@@ -87,6 +90,7 @@ export function WebGpuWaterLabExperience() {
     const requestedMesh = Math.max(96, Math.min(320, Number(query.get("mesh")) || 240));
     const requestedSimulation = Math.max(64, Math.min(512, Number(query.get("simulation")) || 256));
     const requestedScale = Math.max(0.5, Math.min(1.25, Number(query.get("scale")) || 1));
+    const requestedWaves = Math.max(0.15, Math.min(1.6, Number(query.get("waves")) || 1));
     const requestedFixedTime = Number(query.get("fixedTime"));
     const fixedTime = query.has("fixedTime") && Number.isFinite(requestedFixedTime) ? requestedFixedTime : undefined;
     const requestedYaw = Number(query.get("yaw"));
@@ -101,6 +105,7 @@ export function WebGpuWaterLabExperience() {
     setMeshResolutionState(requestedMesh);
     setSimulationResolutionState(requestedSimulation);
     setRenderScaleState(requestedScale);
+    setWaveScaleState(requestedWaves);
     const engine = new WebGpuWaterEngine(canvas, {
       mode: requestedMode,
       view: requestedView,
@@ -108,6 +113,7 @@ export function WebGpuWaterLabExperience() {
       meshResolution: requestedMesh,
       simulationResolution: requestedSimulation,
       renderScale: requestedScale,
+      waveScale: requestedWaves,
       fixedTime,
       benchmark,
       cameraYaw,
@@ -123,6 +129,7 @@ export function WebGpuWaterLabExperience() {
       setMeshResolution: (value) => { engine.setMeshResolution(value); setMeshResolutionState(value); },
       setSimulationResolution: (value) => { engine.setSimulationResolution(value); setSimulationResolutionState(value); },
       setRenderScale: (value) => { engine.setRenderScale(value); setRenderScaleState(value); },
+      setWaveScale: (value) => { engine.setWaveScale(value); setWaveScaleState(value); },
       resetMetrics: () => engine.resetMetrics(),
     };
     void engine.init().then(() => {
@@ -201,6 +208,10 @@ export function WebGpuWaterLabExperience() {
           <label>
             <span>近岸场 <output>{simulationResolution}²</output></span>
             <input type="range" min="128" max="512" step="64" value={simulationResolution} onChange={(event) => { const value = Number(event.target.value); setSimulationResolutionState(value); engineRef.current?.setSimulationResolution(value); }} />
+          </label>
+          <label>
+            <span>浪高 <output>{waveScale.toFixed(2)}×</output></span>
+            <input type="range" min="0.15" max="1.6" step="0.05" value={waveScale} onChange={(event) => { const value = Number(event.target.value); setWaveScaleState(value); engineRef.current?.setWaveScale(value); }} />
           </label>
           <label>
             <span>渲染缩放 <output>{renderScale.toFixed(2)}×</output></span>

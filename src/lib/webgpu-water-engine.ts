@@ -20,6 +20,7 @@ export type WaterLabOptions = {
   meshResolution: number;
   simulationResolution: number;
   renderScale: number;
+  waveScale: number;
   fixedTime?: number;
   benchmark?: boolean;
   cameraYaw?: number;
@@ -33,6 +34,7 @@ export type WaterLabMetrics = {
   view: WaterView;
   meshResolution: number;
   simulationResolution: number;
+  waveScale: number;
   triangles: number;
   simulationBytes: number;
   simulationSubsteps: number;
@@ -80,6 +82,11 @@ const OPEN_WATER_MAX_ORBIT = 250;
 // A glTF hull riding the simulated surface. It is placed near the camera target
 // so the default framing shows it, and offset from the wake impulse at (0, -12)
 // so the two read as separate features.
+// Swell amplitude multiplier. The floor is not zero: a dead-flat surface has no
+// slope for the BRDF to work with and the ocean turns into a mirror.
+const MIN_WAVE_SCALE = 0.15;
+const MAX_WAVE_SCALE = 1.6;
+
 const SHIP_MODEL_URL = "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf";
 // The two scenes do not share a seabed: the open ocean's is a submerged shelf
 // while the island scene raises authored dunes above the waterline. A single
@@ -302,15 +309,15 @@ fn terrainAtWorld(p: vec2<f32>) -> f32 {
 fn spectralBoundaryState(p: vec2<f32>, depth: f32) -> vec4<f32> {
   let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0);
-  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0);
-  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0);
-  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0);
+  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
+  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
   let longHeight = long0.b;
   let mediumHeight = medium0.b;
   let eta = longHeight + mediumHeight
-    + 0.14 * (longHeight * longHeight - 0.080)
-    + 0.32 * (mediumHeight * mediumHeight - 0.030);
+    + 0.14 * (longHeight * longHeight - 0.080 * uniforms.waves.y)
+    + 0.32 * (mediumHeight * mediumHeight - 0.030 * uniforms.waves.y);
   // The boundary transport follows the dominant spectrum direction. Interior
   // momentum immediately becomes bathymetry-aware through the conservative
   // flux. This is a relaxation boundary, not a second rendered wave layer.
@@ -513,10 +520,10 @@ fn updateBreakerEvents(@builtin(global_invocation_id) id: vec3<u32>) {
 
   let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0);
-  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0);
-  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0);
-  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0);
+  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
+  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
   let crossDerivative = long0.a * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium0.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
   let horizontalDerivative = long1.ba * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium1.ba * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
   let jacobian = (1.0 + horizontalDerivative.x) * (1.0 + horizontalDerivative.y) - crossDerivative * crossDerivative;
@@ -770,8 +777,8 @@ struct Output {
   let surfaceP = p - refractedSunOffset;
   let mediumUv = fract(surfaceP / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let shortUv = fract(surfaceP / ${SPECTRAL_CASCADES[2].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let medium0 = textureSample(mediumField0, spectrumSampler, mediumUv);
-  let medium1 = textureSample(mediumField1, spectrumSampler, mediumUv);
+  let medium0 = textureSample(mediumField0, spectrumSampler, mediumUv) * uniforms.waves.x;
+  let medium1 = textureSample(mediumField1, spectrumSampler, mediumUv) * uniforms.waves.x;
   let short0 = textureSample(shortField0, spectrumSampler, shortUv);
   let short1 = textureSample(shortField1, spectrumSampler, shortUv);
   let mediumCross = medium0.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
@@ -983,16 +990,16 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
   let simUv = (p - uniforms.simulation.xy) / uniforms.simulation.z + vec2<f32>(0.5);
   let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0);
-  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0);
-  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0);
-  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0);
+  let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
+  let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
+  let medium1 = textureSampleLevel(mediumField1, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
   let horizontalDisplacement = long0.rg * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium0.rg * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
   let longHeight = long0.b;
   let mediumHeight = medium0.b;
   let spectralHeight = longHeight + mediumHeight
-    + 0.14 * (longHeight * longHeight - 0.080)
-    + 0.32 * (mediumHeight * mediumHeight - 0.030);
+    + 0.14 * (longHeight * longHeight - 0.080 * uniforms.waves.y)
+    + 0.32 * (mediumHeight * mediumHeight - 0.030 * uniforms.waves.y);
   let crossDerivative = long0.a * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium0.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
   let longSlope = long1.rg * (1.0 + 0.28 * longHeight);
   let mediumSlope = medium1.rg * (1.0 + 0.64 * mediumHeight);
@@ -1879,6 +1886,9 @@ export class WebGpuWaterEngine {
     this.allocateFields();
   }
   setRenderScale(value: number) { this.options.renderScale = Math.max(0.5, Math.min(1.25, value)); this.resize(true); }
+  setWaveScale(value: number) {
+    this.options.waveScale = Math.max(MIN_WAVE_SCALE, Math.min(MAX_WAVE_SCALE, Number.isFinite(value) ? value : 1));
+  }
 
   resetMetrics() {
     this.frameTimes.length = 0;
@@ -2022,6 +2032,8 @@ export class WebGpuWaterEngine {
     values.set([Math.hypot(...frame.playerVelocity), 1, this.canvas.width, this.canvas.height], 48);
     const validationMesh = this.options.scene === "shore" ? 512 : this.options.meshResolution;
     values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
+    const waveScale = this.options.waveScale;
+    values.set([waveScale, waveScale * waveScale, 0, 0], 56);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2188,6 +2200,7 @@ export class WebGpuWaterEngine {
       view: this.options.view,
       meshResolution: this.options.meshResolution,
       simulationResolution: this.options.simulationResolution,
+      waveScale: this.options.waveScale,
       triangles: (this.options.scene === "shore"
         ? 512 * 512 * 4
         : this.options.meshResolution * this.options.meshResolution * 2

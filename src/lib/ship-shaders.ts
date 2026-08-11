@@ -13,13 +13,15 @@ struct ShipTransform {
 fn shipWaveHeight(p: vec2<f32>, longScale: f32, mediumScale: f32) -> f32 {
   let longUv = fract(p / longScale + vec2<f32>(0.5));
   let mediumUv = fract(p / mediumScale + vec2<f32>(0.5));
-  let longHeight = textureSampleLevel(longField, spectrumSampler, longUv, 0.0).b;
-  let mediumHeight = textureSampleLevel(mediumField, spectrumSampler, mediumUv, 0.0).b;
+  // The swell multiplier has to match the water surface exactly, otherwise the
+  // hull rides at a height the ocean is no longer drawn at.
+  let longHeight = textureSampleLevel(longField, spectrumSampler, longUv, 0.0).b * uniforms.waves.x;
+  let mediumHeight = textureSampleLevel(mediumField, spectrumSampler, mediumUv, 0.0).b * uniforms.waves.x;
   // Same bound-harmonic correction the water surface applies, so the hull sits
   // on the crests the renderer actually draws instead of a symmetric sine.
   return longHeight + mediumHeight
-    + 0.14 * (longHeight * longHeight - 0.080)
-    + 0.32 * (mediumHeight * mediumHeight - 0.030);
+    + 0.14 * (longHeight * longHeight - 0.080 * uniforms.waves.y)
+    + 0.32 * (mediumHeight * mediumHeight - 0.030 * uniforms.waves.y);
 }
 `;
 
