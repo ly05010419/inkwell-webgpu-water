@@ -26,6 +26,9 @@ type BenchmarkBridge = {
   setWaveScale: (scale: number) => void;
   setDistantRoughness: (value: number) => void;
   setDetailRange: (value: number) => void;
+  setSwellSmoothing: (value: number) => void;
+  setLongCascadeScale: (value: number) => void;
+  setMediumCascadeScale: (value: number) => void;
   setFogReach: (value: number) => void;
   resetMetrics: () => void;
 };
@@ -45,6 +48,9 @@ const EMPTY_METRICS: WaterLabMetrics = {
   waveScale: 1,
   distantRoughness: 0,
   detailRange: 1,
+  swellSmoothing: 1,
+  longCascadeScale: 240,
+  mediumCascadeScale: 64,
   fogReach: 0,
   triangles: 230_400,
   simulationBytes: 1_048_576,
@@ -84,6 +90,9 @@ export function WebGpuWaterLabExperience() {
   const [waveScale, setWaveScaleState] = useState(1);
   const [distantRoughness, setDistantRoughnessState] = useState(0);
   const [detailRange, setDetailRangeState] = useState(1);
+  const [swellSmoothing, setSwellSmoothingState] = useState(1);
+  const [longCascadeScale, setLongCascadeScaleState] = useState(240);
+  const [mediumCascadeScale, setMediumCascadeScaleState] = useState(64);
   const [fogReach, setFogReachState] = useState(0);
   const [metrics, setMetrics] = useState<WaterLabMetrics>(EMPTY_METRICS);
   const [starting, setStarting] = useState(true);
@@ -102,7 +111,11 @@ export function WebGpuWaterLabExperience() {
     const requestedWaves = Math.max(0.15, Math.min(1.6, Number(query.get("waves")) || 1));
     const requestedRoughness = Math.max(0, Math.min(3, Number(query.get("farRough")) || 0));
     const requestedDetail = Math.max(0.4, Math.min(8, Number(query.get("detail")) || 1));
+    const smoothQuery = Number(query.get("smooth"));
+    const requestedSmooth = query.has("smooth") && Number.isFinite(smoothQuery) ? Math.max(0, Math.min(3, smoothQuery)) : 1;
     const requestedFog = Math.max(0, Math.min(3, Number(query.get("fog")) || 0));
+    const requestedLongScale = Math.max(80, Math.min(480, Number(query.get("longScale")) || 240));
+    const requestedMediumScale = Math.max(24, Math.min(128, Number(query.get("mediumScale")) || 64));
     const requestedFixedTime = Number(query.get("fixedTime"));
     const fixedTime = query.has("fixedTime") && Number.isFinite(requestedFixedTime) ? requestedFixedTime : undefined;
     const requestedYaw = Number(query.get("yaw"));
@@ -120,6 +133,9 @@ export function WebGpuWaterLabExperience() {
     setWaveScaleState(requestedWaves);
     setDistantRoughnessState(requestedRoughness);
     setDetailRangeState(requestedDetail);
+    setSwellSmoothingState(requestedSmooth);
+    setLongCascadeScaleState(requestedLongScale);
+    setMediumCascadeScaleState(requestedMediumScale);
     setFogReachState(requestedFog);
     const engine = new WebGpuWaterEngine(canvas, {
       mode: requestedMode,
@@ -131,6 +147,9 @@ export function WebGpuWaterLabExperience() {
       waveScale: requestedWaves,
       distantRoughness: requestedRoughness,
       detailRange: requestedDetail,
+      swellSmoothing: requestedSmooth,
+      longCascadeScale: requestedLongScale,
+      mediumCascadeScale: requestedMediumScale,
       fogReach: requestedFog,
       fixedTime,
       benchmark,
@@ -150,6 +169,9 @@ export function WebGpuWaterLabExperience() {
       setWaveScale: (value) => { engine.setWaveScale(value); setWaveScaleState(value); },
       setDistantRoughness: (value) => { engine.setDistantRoughness(value); setDistantRoughnessState(value); },
       setDetailRange: (value) => { engine.setDetailRange(value); setDetailRangeState(value); },
+      setSwellSmoothing: (value) => { engine.setSwellSmoothing(value); setSwellSmoothingState(value); },
+      setLongCascadeScale: (value) => { engine.setLongCascadeScale(value); setLongCascadeScaleState(value); },
+      setMediumCascadeScale: (value) => { engine.setMediumCascadeScale(value); setMediumCascadeScaleState(value); },
       setFogReach: (value) => { engine.setFogReach(value); setFogReachState(value); },
       resetMetrics: () => engine.resetMetrics(),
     };
@@ -238,12 +260,24 @@ export function WebGpuWaterLabExperience() {
             <input type="range" min="128" max="512" step="64" value={simulationResolution} onChange={(event) => { const value = Number(event.target.value); setSimulationResolutionState(value); engineRef.current?.setSimulationResolution(value); }} />
           </label>
           <label>
+            <span>长浪尺度 <output>{longCascadeScale.toFixed(0)}m</output></span>
+            <input type="range" min="80" max="480" step="10" value={longCascadeScale} onChange={(event) => { const value = Number(event.target.value); setLongCascadeScaleState(value); engineRef.current?.setLongCascadeScale(value); }} />
+          </label>
+          <label>
+            <span>中浪尺度 <output>{mediumCascadeScale.toFixed(0)}m</output></span>
+            <input type="range" min="24" max="128" step="4" value={mediumCascadeScale} onChange={(event) => { const value = Number(event.target.value); setMediumCascadeScaleState(value); engineRef.current?.setMediumCascadeScale(value); }} />
+          </label>
+          <label>
             <span>浪高 <output>{waveScale.toFixed(2)}×</output></span>
             <input type="range" min="0.15" max="1.6" step="0.05" value={waveScale} onChange={(event) => { const value = Number(event.target.value); setWaveScaleState(value); engineRef.current?.setWaveScale(value); }} />
           </label>
           <label>
             <span>细节距离 <output>{(detailRange * 118).toFixed(0)}m</output></span>
             <input type="range" min="0.4" max="8" step="0.1" value={detailRange} onChange={(event) => { const value = Number(event.target.value); setDetailRangeState(value); engineRef.current?.setDetailRange(value); }} />
+          </label>
+          <label>
+            <span>远景平滑 <output>{swellSmoothing === 0 ? "关闭" : `${swellSmoothing.toFixed(2)}×`}</output></span>
+            <input type="range" min="0" max="3" step="0.05" value={swellSmoothing} onChange={(event) => { const value = Number(event.target.value); setSwellSmoothingState(value); engineRef.current?.setSwellSmoothing(value); }} />
           </label>
           <label>
             <span>远景粗糙度 <output>{distantRoughness.toFixed(2)}</output></span>

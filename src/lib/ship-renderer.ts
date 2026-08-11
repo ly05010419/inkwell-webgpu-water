@@ -101,6 +101,7 @@ export class ShipRenderer {
   private constructor(
     private readonly device: GPUDevice,
     private readonly parts: readonly ShipPart[],
+    private readonly hullHalves: readonly [number, number],
     private readonly transformPipeline: GPUComputePipeline,
     private readonly transformInputs: {
       readonly worldUniformBuffer: GPUBuffer;
@@ -146,6 +147,13 @@ export class ShipRenderer {
    * Moves the hull. The scenes do not share a seabed, so a spot that is open
    * water in one can be dry dune in the other.
    */
+  /** Keeps the buoyancy probes tiling-consistent with the live water surface. */
+  setCascadeScales(longScale: number, mediumScale: number) {
+    this.device.queue.writeBuffer(this.transformInputs.hullSpanBuffer, 0, new Float32Array([
+      this.hullHalves[0], this.hullHalves[1], longScale, mediumScale,
+    ]));
+  }
+
   setPlacement(placement: ShipPlacement) {
     this.device.queue.writeBuffer(this.transformInputs.placementBuffer, 0, new Float32Array([
       placement.centre[0], placement.centre[1], placement.heading, placement.draft,
@@ -286,6 +294,7 @@ export class ShipRenderer {
     return new ShipRenderer(
       device,
       parts,
+      [halfLength, halfBeam],
       transformPipeline,
       { worldUniformBuffer: options.worldUniformBuffer, placementBuffer, hullSpanBuffer, transformBuffer },
       { long: options.longField, medium: options.mediumField, sampler: options.spectrumSampler },

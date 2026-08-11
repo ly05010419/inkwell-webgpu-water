@@ -23,6 +23,9 @@ export type WaterLabOptions = {
   waveScale: number;
   distantRoughness: number;
   detailRange: number;
+  swellSmoothing: number;
+  longCascadeScale: number;
+  mediumCascadeScale: number;
   fogReach: number;
   fixedTime?: number;
   benchmark?: boolean;
@@ -40,6 +43,9 @@ export type WaterLabMetrics = {
   waveScale: number;
   distantRoughness: number;
   detailRange: number;
+  swellSmoothing: number;
+  longCascadeScale: number;
+  mediumCascadeScale: number;
   fogReach: number;
   triangles: number;
   simulationBytes: number;
@@ -98,6 +104,14 @@ const MAX_DISTANT_ROUGHNESS = 3;
 // Multiplier on the 42-118 m capillary fade and the 95-188 m crest fade.
 const MIN_DETAIL_RANGE = 0.4;
 const MAX_DETAIL_RANGE = 8;
+// Strength of the swell cascades' screen-space slope fade. 1 reproduces the
+// tuned look, 0 keeps full per-fragment slope to the horizon (glittery).
+const MAX_SWELL_SMOOTHING = 3;
+// Runtime bounds for the two displacing cascades' tile sizes. The spectrum is
+// regenerated on the CPU when either changes; shaders read the live values
+// from atmosphere.zw, so no pipeline rebuild is involved.
+const LONG_SCALE_RANGE = [80, 480] as const;
+const MEDIUM_SCALE_RANGE = [24, 128] as const;
 // Where the open ocean's radial fog closes, relative to its authored position.
 // 0 removes it entirely, which is the default.
 const MAX_FOG_REACH = 3;
@@ -335,8 +349,8 @@ fn terrainAtWorld(p: vec2<f32>) -> f32 {
 }
 
 fn spectralBoundaryState(p: vec2<f32>, depth: f32) -> vec4<f32> {
-  let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let longUv = fract(p / uniforms.atmosphere.z + vec2<f32>(0.5));
+  let mediumUv = fract(p / uniforms.atmosphere.w + vec2<f32>(0.5));
   let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
@@ -546,8 +560,8 @@ fn updateBreakerEvents(@builtin(global_invocation_id) id: vec3<u32>) {
   let speed = length(state.gb) / dynamicDepth;
   let froude = speed / max(sqrt(9.81 * dynamicDepth), 0.001);
 
-  let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let longUv = fract(p / uniforms.atmosphere.z + vec2<f32>(0.5));
+  let mediumUv = fract(p / uniforms.atmosphere.w + vec2<f32>(0.5));
   let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
@@ -803,7 +817,7 @@ struct Output {
   // spectral water instead of painting a cellular texture onto the sand.
   let refractedSunOffset = L.xz / max(L.y, 0.12) * depth * 0.18;
   let surfaceP = p - refractedSunOffset;
-  let mediumUv = fract(surfaceP / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let mediumUv = fract(surfaceP / uniforms.atmosphere.w + vec2<f32>(0.5));
   let shortUv = fract(surfaceP / ${SPECTRAL_CASCADES[2].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let medium0 = textureSample(mediumField0, spectrumSampler, mediumUv) * uniforms.waves.x;
   let medium1 = textureSample(mediumField1, spectrumSampler, mediumUv) * uniforms.waves.x;
@@ -1023,8 +1037,8 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
   let depth = uniforms.sunWater.w - terrain.r;
   let shallowAttenuation = smoothstep(0.14, 2.7, depth);
   let simUv = (p - uniforms.simulation.xy) / uniforms.simulation.z + vec2<f32>(0.5);
-  let longUv = fract(p / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let mediumUv = fract(p / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let longUv = fract(p / uniforms.atmosphere.z + vec2<f32>(0.5));
+  let mediumUv = fract(p / uniforms.atmosphere.w + vec2<f32>(0.5));
   let long0 = textureSampleLevel(longField0, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let long1 = textureSampleLevel(longField1, spectrumSampler, longUv, 0.0) * uniforms.waves.x;
   let medium0 = textureSampleLevel(mediumField0, spectrumSampler, mediumUv, 0.0) * uniforms.waves.x;
@@ -1285,15 +1299,25 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   let paramFieldUv = clamp(surfaceParam / uniforms.terrain.x + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
   let paramDepth = uniforms.sunWater.w - textureSample(terrainField, fieldSampler, paramFieldUv).r;
   let paramAttenuation = smoothstep(0.14, 2.7, paramDepth);
-  let longUvF = fract(surfaceParam / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
-  let mediumUvF = fract(surfaceParam / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let longUvF = fract(surfaceParam / uniforms.atmosphere.z + vec2<f32>(0.5));
+  let mediumUvF = fract(surfaceParam / uniforms.atmosphere.w + vec2<f32>(0.5));
   let long0F = textureSample(longField0, spectrumSampler, longUvF) * uniforms.waves.x;
   let long1F = textureSample(longField1, spectrumSampler, longUvF) * uniforms.waves.x;
   let medium0F = textureSample(mediumField0, spectrumSampler, mediumUvF) * uniforms.waves.x;
   let medium1F = textureSample(mediumField1, spectrumSampler, mediumUvF) * uniforms.waves.x;
-  let crossDerivativeF = long0F.a * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium0F.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
-  let spectralSlopeF = long1F.rg * (1.0 + 0.28 * long0F.b) + medium1F.rg * (1.0 + 0.64 * medium0F.b);
-  let horizontalDerivativeF = long1F.ba * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium1F.ba * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
+  // The same screen-space sampling-rate fade the capillary cascade gets, per
+  // cascade: near the horizon one pixel spans many medium wavelengths, and
+  // per-fragment slopes alias into a glittering noise band there. Each faded
+  // slope joins the recovered-variance path below, so the distant-roughness
+  // control keeps deciding whether the energy returns as BRDF roughness.
+  let mediumPixelsPerWave = uniforms.atmosphere.w / 8.0 / max(pixelWorldSize, 1e-6);
+  let swellSmoothing = uniforms.atmosphere.y;
+  let mediumFadeF = select(smoothstep(3.0, 14.0, mediumPixelsPerWave * detailRange / max(swellSmoothing, 0.001)), 1.0, swellSmoothing <= 0.0);
+  let longPixelsPerWave = uniforms.atmosphere.z / 5.0 / max(pixelWorldSize, 1e-6);
+  let longFadeF = select(smoothstep(3.0, 14.0, longPixelsPerWave * detailRange / max(swellSmoothing, 0.001)), 1.0, swellSmoothing <= 0.0);
+  let crossDerivativeF = long0F.a * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} * longFadeF + medium0F.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)} * mediumFadeF;
+  let spectralSlopeF = long1F.rg * (1.0 + 0.28 * long0F.b) * longFadeF + medium1F.rg * (1.0 + 0.64 * medium0F.b) * mediumFadeF;
+  let horizontalDerivativeF = long1F.ba * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} * longFadeF + medium1F.ba * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)} * mediumFadeF;
   let simTexelF = uniforms.simulation.w;
   let simLeftF = simulationSample(input.simulationUv - vec2<f32>(simTexelF, 0.0)).r;
   let simRightF = simulationSample(input.simulationUv + vec2<f32>(simTexelF, 0.0)).r;
@@ -1319,7 +1343,9 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   // behaviour; at 1 the full variance is retained.
   // Variance is the square of slope, and it is what the Cox-Munk distribution
   // in oceanSunGlitter consumes.
-  let fadedSlope = length(short1.rg) * (1.0 - shortDistanceFade);
+  let fadedSlope = length(short1.rg) * (1.0 - shortDistanceFade)
+    + length(medium1F.rg) * (1.0 - mediumFadeF)
+    + length(long1F.rg) * (1.0 - longFadeF);
   let recoveredVariance = fadedSlope * fadedSlope * uniforms.waves.z;
   let surfaceRoughness = mix(0.035, 0.115, smoothstep(0.012, 0.30, length(shortSlope) + fadedSlope * uniforms.waves.z));
   let underwater = uniforms.terrain.w > 0.5;
@@ -1481,7 +1507,9 @@ function spectrumNormalisationFactor(spread: number) {
     : -4.8e-8 * s4 + 1.07e-5 * s3 - 9.53e-4 * s2 + 5.9e-2 * spread + 0.393;
 }
 
-function buildSpectralOceanData(size: number, config: (typeof SPECTRAL_CASCADES)[number]) {
+type SpectralCascadeConfig = Omit<(typeof SPECTRAL_CASCADES)[number], "lengthScale"> & { lengthScale: number };
+
+function buildSpectralOceanData(size: number, config: SpectralCascadeConfig) {
   const { lengthScale, cutoffLow, cutoffHigh, amplitudeScale, secondaryScale, seed } = config;
   const gravity = 9.81;
   const depth = 54;
@@ -1789,7 +1817,7 @@ export class WebGpuWaterEngine {
         longField: this.spectralFields[0][0][0].createView(),
         mediumField: this.spectralFields[1][0][0].createView(),
         spectrumSampler: this.spectrumSampler!,
-        cascadeScales: [SPECTRAL_CASCADES[0].lengthScale, SPECTRAL_CASCADES[1].lengthScale],
+        cascadeScales: [this.options.longCascadeScale, this.options.mediumCascadeScale],
         modelUrl: SHIP_MODEL_URL,
         placement: SHIP_PLACEMENTS[this.options.scene],
       });
@@ -1914,7 +1942,7 @@ export class WebGpuWaterEngine {
       this.spectralIfftParamBuffers.push(params);
     }
     for (let cascadeIndex = 0; cascadeIndex < SPECTRAL_CASCADES.length; cascadeIndex += 1) {
-      const config = SPECTRAL_CASCADES[cascadeIndex];
+      const config = { ...SPECTRAL_CASCADES[cascadeIndex], lengthScale: this.cascadeScale(cascadeIndex) };
       const initialTexture = device.createTexture({ label: `Tethys cascade ${cascadeIndex} initial spectrum`, size: [SPECTRAL_RESOLUTION, SPECTRAL_RESOLUTION], format: "rgba32float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       const waveDataTexture = device.createTexture({ label: `Tethys cascade ${cascadeIndex} wave vectors and dispersion`, size: [SPECTRAL_RESOLUTION, SPECTRAL_RESOLUTION], format: "rgba32float", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       const fields = [0, 1].map((ping) => [0, 1].map((field) => device.createTexture({
@@ -2047,6 +2075,40 @@ export class WebGpuWaterEngine {
   }
   setDetailRange(value: number) {
     this.options.detailRange = Math.max(MIN_DETAIL_RANGE, Math.min(MAX_DETAIL_RANGE, Number.isFinite(value) ? value : 1));
+  }
+  private cascadeScale(index: number) {
+    if (index === 0) return this.options.longCascadeScale;
+    if (index === 1) return this.options.mediumCascadeScale;
+    return SPECTRAL_CASCADES[index].lengthScale;
+  }
+  // Re-derives one cascade's initial spectrum for its new tile size and
+  // overwrites the textures in place; the evolution/IFFT chain and all
+  // pipelines are untouched because shaders read the size from atmosphere.zw.
+  private uploadCascadeSpectrum(cascadeIndex: number) {
+    const device = this.device;
+    if (!device || this.spectralInitialTextures.length <= cascadeIndex) return;
+    const config = { ...SPECTRAL_CASCADES[cascadeIndex], lengthScale: this.cascadeScale(cascadeIndex) };
+    const data = buildSpectralOceanData(SPECTRAL_RESOLUTION, config);
+    const upload = { bytesPerRow: SPECTRAL_RESOLUTION * 16, rowsPerImage: SPECTRAL_RESOLUTION };
+    device.queue.writeTexture({ texture: this.spectralInitialTextures[cascadeIndex] }, data.initialSpectrum, upload, [SPECTRAL_RESOLUTION, SPECTRAL_RESOLUTION]);
+    device.queue.writeTexture({ texture: this.spectralWaveDataTextures[cascadeIndex] }, data.waveData, upload, [SPECTRAL_RESOLUTION, SPECTRAL_RESOLUTION]);
+  }
+  setLongCascadeScale(value: number) {
+    const next = Math.max(LONG_SCALE_RANGE[0], Math.min(LONG_SCALE_RANGE[1], Number.isFinite(value) ? value : 240));
+    if (next === this.options.longCascadeScale) return;
+    this.options.longCascadeScale = next;
+    this.uploadCascadeSpectrum(0);
+    this.ship?.setCascadeScales(this.options.longCascadeScale, this.options.mediumCascadeScale);
+  }
+  setMediumCascadeScale(value: number) {
+    const next = Math.max(MEDIUM_SCALE_RANGE[0], Math.min(MEDIUM_SCALE_RANGE[1], Number.isFinite(value) ? value : 64));
+    if (next === this.options.mediumCascadeScale) return;
+    this.options.mediumCascadeScale = next;
+    this.uploadCascadeSpectrum(1);
+    this.ship?.setCascadeScales(this.options.longCascadeScale, this.options.mediumCascadeScale);
+  }
+  setSwellSmoothing(value: number) {
+    this.options.swellSmoothing = Math.max(0, Math.min(MAX_SWELL_SMOOTHING, Number.isFinite(value) ? value : 1));
   }
   setFogReach(value: number) {
     this.options.fogReach = Math.max(0, Math.min(MAX_FOG_REACH, Number.isFinite(value) ? value : 0));
@@ -2195,7 +2257,7 @@ export class WebGpuWaterEngine {
     values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
     const waveScale = this.options.waveScale;
     values.set([waveScale, waveScale * waveScale, this.options.distantRoughness, this.options.detailRange], 56);
-    values.set([this.options.scene === "shore" ? 1 : this.options.fogReach, 0, 0, 0], 60);
+    values.set([this.options.scene === "shore" ? 1 : this.options.fogReach, this.options.swellSmoothing, this.options.longCascadeScale, this.options.mediumCascadeScale], 60);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2365,6 +2427,9 @@ export class WebGpuWaterEngine {
       waveScale: this.options.waveScale,
       distantRoughness: this.options.distantRoughness,
       detailRange: this.options.detailRange,
+      swellSmoothing: this.options.swellSmoothing,
+      longCascadeScale: this.options.longCascadeScale,
+      mediumCascadeScale: this.options.mediumCascadeScale,
       fogReach: this.options.fogReach,
       triangles: (this.options.scene === "shore"
         ? 512 * 512 * 4

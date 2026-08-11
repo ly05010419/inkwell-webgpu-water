@@ -22,6 +22,10 @@ struct WorldUniforms {
   // distance over which surface detail survives.
   waves: vec4<f32>,
   // x: multiplier on where the open ocean's radial fog closes; 0 disables it.
+  // y: strength of the swell cascades' screen-space slope fade -- higher
+  // smooths the far field sooner, 0 disables the fade entirely.
+  // zw: live tile sizes (metres) of the long and medium cascades; every
+  // consumer must divide by these rather than bake the authored 240/64.
   atmosphere: vec4<f32>,
 }
 `;
