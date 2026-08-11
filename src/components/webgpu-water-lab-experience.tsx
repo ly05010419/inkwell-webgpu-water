@@ -153,15 +153,22 @@ export function WebGpuWaterLabExperience() {
       setFogReach: (value) => { engine.setFogReach(value); setFogReachState(value); },
       resetMetrics: () => engine.resetMetrics(),
     };
+    // Dev StrictMode runs this effect twice; without the flag the disposed
+    // first engine's init() resolves later and marks the second engine's
+    // bridge ready while it is still initialising.
+    let cancelled = false;
     void engine.init().then(() => {
+      if (cancelled) return;
       setStarting(false);
       if (window.__WEBGPU_WATER_LAB__) window.__WEBGPU_WATER_LAB__.ready = true;
     }).catch((error: unknown) => {
+      if (cancelled) return;
       setStarting(false);
       setMetrics((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }));
     });
     const telemetry = window.setInterval(() => setMetrics(engine.getMetrics()), 250);
     return () => {
+      cancelled = true;
       window.clearInterval(telemetry);
       engine.dispose();
       engineRef.current = null;

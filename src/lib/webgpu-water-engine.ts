@@ -1707,9 +1707,20 @@ export class WebGpuWaterEngine {
   async init() {
     if (!navigator.gpu) throw new Error("当前浏览器不支持 WebGPU。请使用较新版本的 Chromium 内核浏览器，并确保已启用硬件加速。");
     this.adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    // React dev StrictMode mounts, disposes and remounts the component, so a
+    // disposed engine's init can still be in flight while its replacement owns
+    // the same canvas. Bail after every await: the stale engine must never
+    // configure the shared context, attach observers or start a render loop --
+    // racing the live engine for the context is what stalled dev rendering.
+    if (this.disposed) return;
     if (!this.adapter) throw new Error("未找到可用的 WebGPU 适配器。");
     const requiredFeatures: GPUFeatureName[] = this.adapter.features.has("timestamp-query") ? ["timestamp-query"] : [];
     this.device = await this.adapter.requestDevice({ requiredFeatures });
+    if (this.disposed) {
+      this.device.destroy();
+      this.device = null;
+      return;
+    }
     this.device.lost.then((info) => { if (!this.disposed) this.fail(`WebGPU 设备已丢失：${info.message || info.reason}`); });
     this.device.addEventListener("uncapturederror", (event) => this.fail(event.error.message));
     const info = this.adapter.info;
@@ -1719,6 +1730,7 @@ export class WebGpuWaterEngine {
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.context.configure({ device: this.device, format: this.format, alphaMode: "opaque" });
     await this.createResources();
+    if (this.disposed) return;
     if (this.device.features.has("timestamp-query")) {
       this.querySet = this.device.createQuerySet({ label: "Tethys compute and render timestamps", type: "timestamp", count: 4 });
       this.queryResolve = this.device.createBuffer({ label: "Tethys timestamp resolve", size: 32, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
@@ -1746,6 +1758,11 @@ export class WebGpuWaterEngine {
     } catch (error) {
       this.shipError = error instanceof Error ? error.message : String(error);
     }
+    if (this.disposed) {
+      this.ship?.dispose();
+      this.ship = null;
+      return;
+    }
     this.ready = true;
     this.startTime = performance.now();
     this.lastFrameTime = this.startTime;
@@ -1766,6 +1783,7 @@ export class WebGpuWaterEngine {
       assertShaderModule(device, "Tethys captured scene composite", SCENE_BLIT_SHADER),
       assertShaderModule(device, "Tethys water material", WATER_RENDER_SHADER),
     ]);
+    if (this.disposed) return;
     this.worldUniformBuffer = device.createBuffer({ label: "Tethys world uniforms", size: WORLD_UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.impulseParamBuffer = device.createBuffer({ label: "Tethys impulse step parameters", size: SIMULATION_PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.calmParamBuffer = device.createBuffer({ label: "Tethys calm step parameters", size: SIMULATION_PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -1821,6 +1839,9 @@ export class WebGpuWaterEngine {
     };
     this.optimizedBreakerPatchPipeline = await device.createRenderPipelineAsync({ ...breakerPatchBase, label: "optimized Tethys breaker patch", fragment: { module: waterModule, entryPoint: "waterFragment", constants: { REFERENCE_MODE: 0 }, targets: [waterTarget] } });
     this.referenceBreakerPatchPipeline = await device.createRenderPipelineAsync({ ...breakerPatchBase, label: "reference Tethys breaker patch", fragment: { module: waterModule, entryPoint: "waterFragment", constants: { REFERENCE_MODE: 1 }, targets: [waterTarget] } });
+    // A dispose during the pipeline awaits already destroyed the buffers made
+    // above; allocating the field textures now would leak them irrecoverably.
+    if (this.disposed) return;
     this.allocateFields();
   }
 
@@ -2365,6 +2386,9 @@ export class WebGpuWaterEngine {
     this.queryReadback?.destroy();
     this.ship?.dispose();
     this.ship = null;
+    // Frees the adapter slot and turns any still-in-flight work from this
+    // engine into no-ops; the lost handler above stays silent once disposed.
+    this.device?.destroy();
   }
 }
 
