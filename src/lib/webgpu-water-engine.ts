@@ -1210,12 +1210,22 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   let shortUv = fract(p / ${SPECTRAL_CASCADES[2].lengthScale.toFixed(1)} + vec2<f32>(0.5));
   let short0 = textureSample(shortField0, spectrumSampler, shortUv);
   let short1 = textureSample(shortField1, spectrumSampler, shortUv);
-  // Capillary detail is dropped with distance because sub-pixel waves alias
-  // into crawling highlights. The range is a quality/stability trade-off rather
-  // than a constant, so it is exposed: raising it keeps texture further out at
-  // the cost of shimmer, lowering it calms the horizon sooner.
+  // Capillary detail is dropped as it approaches the sampling limit, because
+  // sub-pixel waves alias into crawling highlights. The threshold is a
+  // quality/stability trade-off rather than a constant, so it is exposed.
+  //
+  // The test is screen-space sampling density, not world distance. Fading over
+  // a fixed 42-118 m band looks abrupt: screen row maps to distance as 1/d, so
+  // the far half of that band collapses into a few dozen pixels and the detail
+  // appears to switch off. Pixels-per-wavelength is uniform in screen space, so
+  // the ramp reads evenly, and it self-adjusts to field of view, resolution and
+  // render scale instead of assuming the authored camera.
   let detailRange = uniforms.waves.w;
-  let shortDistanceFade = 1.0 - smoothstep(42.0 * detailRange, 118.0 * detailRange, distance(uniforms.cameraTime.xyz, input.world));
+  let eyeDistance = distance(uniforms.cameraTime.xyz, input.world);
+  let pixelWorldSize = eyeDistance * 2.0 * uniforms.cameraUp.w / max(uniforms.interaction.w, 1.0);
+  // Representative wavelength of the capillary cascade's energy peak.
+  let pixelsPerWave = ${SPECTRAL_CASCADES[2].lengthScale.toFixed(1)} / 12.0 / max(pixelWorldSize, 1e-6);
+  let shortDistanceFade = smoothstep(3.0, 14.0, pixelsPerWave * detailRange);
   let shortSlope = short1.rg * shortDistanceFade;
   // Short waves become an aggregate slope distribution instead of a literal
   // high-frequency normal texture. This is the geometry-to-BRDF transition
