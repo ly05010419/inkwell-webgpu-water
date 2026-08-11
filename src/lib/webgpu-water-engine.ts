@@ -144,6 +144,8 @@ const BREAKER_PATCH_TRIANGLES = BREAKER_PATCH_ALONG_RESOLUTION * BREAKER_PATCH_A
 //   3. the attached 256x48 crest patch geometry
 //   4. the main-surface discard that hands the band over to that patch
 //   5. the patch draw call and its triangle accounting
+//   6. the per-fragment shading normal in waterFragment, which must fold the
+//      breaker displacement derivatives back in once the crest returns
 // Leaving 4 enabled without 3 punches a transparent hole along the crest band.
 const BREAKER_ENABLED = false;
 const BREAKER_SHADER_GATE = BREAKER_ENABLED ? "1.0" : "0.0";
@@ -1272,7 +1274,43 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   // Short waves become an aggregate slope distribution instead of a literal
   // high-frequency normal texture. This is the geometry-to-BRDF transition
   // used to avoid sparkling/streaking as sub-pixel waves recede.
-  var N = normalize(input.normal + vec3<f32>(-shortSlope.x, 0.0, -shortSlope.y) * 0.42);
+  // Cascade 0/1 slopes are re-sampled here rather than interpolated from the
+  // vertices: the clipmap doubles its cell size every ring, so a few hundred
+  // metres out the grid undersamples the 64 m cascade and vertex-rate normals
+  // shade as cell-sized facets with a visible seam at every ring boundary.
+  // Geometry stays vertex-rate; only the shading normal is refined. The
+  // pre-displacement surface parameter is recovered from the simulation UV,
+  // which is affine in it and never clamped in the vertex stage.
+  let surfaceParam = (input.simulationUv - vec2<f32>(0.5)) * uniforms.simulation.z + uniforms.simulation.xy;
+  let paramFieldUv = clamp(surfaceParam / uniforms.terrain.x + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+  let paramDepth = uniforms.sunWater.w - textureSample(terrainField, fieldSampler, paramFieldUv).r;
+  let paramAttenuation = smoothstep(0.14, 2.7, paramDepth);
+  let longUvF = fract(surfaceParam / ${SPECTRAL_CASCADES[0].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let mediumUvF = fract(surfaceParam / ${SPECTRAL_CASCADES[1].lengthScale.toFixed(1)} + vec2<f32>(0.5));
+  let long0F = textureSample(longField0, spectrumSampler, longUvF) * uniforms.waves.x;
+  let long1F = textureSample(longField1, spectrumSampler, longUvF) * uniforms.waves.x;
+  let medium0F = textureSample(mediumField0, spectrumSampler, mediumUvF) * uniforms.waves.x;
+  let medium1F = textureSample(mediumField1, spectrumSampler, mediumUvF) * uniforms.waves.x;
+  let crossDerivativeF = long0F.a * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium0F.a * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
+  let spectralSlopeF = long1F.rg * (1.0 + 0.28 * long0F.b) + medium1F.rg * (1.0 + 0.64 * medium0F.b);
+  let horizontalDerivativeF = long1F.ba * ${SPECTRAL_CASCADES[0].choppiness.toFixed(2)} + medium1F.ba * ${SPECTRAL_CASCADES[1].choppiness.toFixed(2)};
+  let simTexelF = uniforms.simulation.w;
+  let simLeftF = simulationSample(input.simulationUv - vec2<f32>(simTexelF, 0.0)).r;
+  let simRightF = simulationSample(input.simulationUv + vec2<f32>(simTexelF, 0.0)).r;
+  let simBackF = simulationSample(input.simulationUv - vec2<f32>(0.0, simTexelF)).r;
+  let simFrontF = simulationSample(input.simulationUv + vec2<f32>(0.0, simTexelF)).r;
+  let simulationDerivativeF = vec2<f32>(simRightF - simLeftF, simFrontF - simBackF) / max(uniforms.simulation.z * simTexelF * 2.0, 0.001);
+  let simulationEdgeF = min(min(input.simulationUv.x, 1.0 - input.simulationUv.x), min(input.simulationUv.y, 1.0 - input.simulationUv.y));
+  let simulationCoverageF = step(0.0, simulationEdgeF) * smoothstep(0.008, 0.055, simulationEdgeF);
+  let nearshoreOwnershipF = simulationCoverageF * (1.0 - smoothstep(3.8, 5.55, paramDepth));
+  let blendedSlopeF = mix(spectralSlopeF * paramAttenuation, simulationDerivativeF, nearshoreOwnershipF);
+  let tangentXF = vec3<f32>(1.0 + horizontalDerivativeF.x * paramAttenuation, blendedSlopeF.x, crossDerivativeF * paramAttenuation);
+  let tangentZF = vec3<f32>(crossDerivativeF * paramAttenuation, blendedSlopeF.y, 1.0 + horizontalDerivativeF.y * paramAttenuation);
+  // The breaker patch carries bespoke crest normals from its vertex stage and
+  // keeps them; everything else takes the refined per-fragment normal.
+  var baseNormal = normalize(cross(tangentZF, tangentXF));
+  if (input.surfaceKind > 0.5) { baseNormal = normalize(input.normal); }
+  var N = normalize(baseNormal + vec3<f32>(-shortSlope.x, 0.0, -shortSlope.y) * 0.42);
   // Fading the capillary slope out of the normal is what stops sub-pixel waves
   // from sparkling, but on its own it also drains the roughness that those
   // waves represent, so the far surface collapses toward a mirror. Feed the
