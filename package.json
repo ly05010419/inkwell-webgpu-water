@@ -1,0 +1,38 @@
+{
+  "name": "inkwell-webgpu-water",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A standalone raw WebGPU port of Inkwell's Tethys water biome.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check": "npm run lint && npm run test && npm run build",
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
+    "visual:baseline": "npm run build && WATER_VISUAL_BASELINE=1 node scripts/visual-gate.mjs",
+    "visual:gate": "npm run build && node scripts/visual-gate.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^20",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@webgpu/types": "^0.1.71",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.0",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,28 @@
+node_modules/
+.next/
+out/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Unused image-generation experiments; the shipped renderer is procedural.
+public/textures/*.png
+
+# Generated benchmark history. Keep the curated latest reports in git.
+benchmarks/webgpu-surface-20*.json
+benchmarks/webgpu-surface-20*.html
+benchmarks/original-comparison-20*.json
+benchmarks/surface-pass-profile-20*.json
+benchmarks/architecture/*-20*.json
+benchmarks/webgpu-water-20*.json
+benchmarks/webgpu-water-20*.html
+
+# Generated visual experiments. Keep the canonical baseline and final parity proof.
+benchmarks/visual/*
+!benchmarks/visual/baseline/
+!benchmarks/visual/baseline/**
+!benchmarks/visual/final-restored/
+!benchmarks/visual/final-restored/**
