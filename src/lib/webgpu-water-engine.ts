@@ -70,9 +70,12 @@ export type WaterLabMetrics = {
 };
 
 // Baseline world extent, and the reference the fog/far-plane scale divides by.
-// The island scene keeps it so its shoreline stays at the authored sampling
-// density: 390 m across a 512-tap terrain field is 0.76 m per texel.
-const TERRAIN_EXTENT = 390;
+// 520 m across a 512-tap terrain field is 1.02 m per texel -- widened from the
+// authored 390 m so the southern island (shelf centre at z = -196) fits inside
+// with margin. Land must never reach the border row: everything beyond the
+// field is border-clamped, so an island touching the edge casts a dry-land
+// shadow to infinity through the clamp, discarding the water above it.
+const TERRAIN_EXTENT = 520;
 // The open ocean sees 10x further. This scales fog reach, the far plane and the
 // water's mesh coverage -- deliberately NOT the terrain field, which stays at
 // 390 m across 512 taps (0.76 m/texel). Stretching the field to match would
@@ -89,7 +92,6 @@ const OPEN_WATER_VIEW_SCALE = 100;
 // the ceiling only needs to stay inside the clipmap's 16384 m reach so water
 // still surrounds the camera; 12 km also keeps f32 world coordinates well
 // clear of visible spectral-UV jitter.
-const SHORE_MAX_ORBIT = 145;
 const OPEN_WATER_MAX_ORBIT = 12000;
 // A glTF hull riding the simulated surface. It is placed near the camera target
 // so the default framing shows it, and offset from the wake impulse at (0, -12)
@@ -185,7 +187,6 @@ const WATER_HORIZON_REACH = 20000;
 // precision. The island scene keeps the authored 560 m, where its waterline
 // needs the precision and nothing is drawn beyond a few hundred metres.
 const OPEN_WATER_FAR_PLANE = 50000;
-const SHORE_FAR_PLANE = 560;
 const SPECTRAL_CASCADES = [
   { lengthScale: 240, cutoffLow: 0.024, cutoffHigh: 0.36, amplitudeScale: 0.45, choppiness: 1.18, secondaryScale: 0.22, seed: 0x51f15e },
   { lengthScale: 64, cutoffLow: 0.30, cutoffHigh: 1.42, amplitudeScale: 0.45, choppiness: 1.05, secondaryScale: 0.08, seed: 0x72a93b },
@@ -260,7 +261,13 @@ fn terrainHeight(p: vec2<f32>, shoreMix: f32) -> f32 {
   seabed += sin(p.x * 0.017 - p.y * 0.013 + 0.6) * 0.48;
   // The material lab keeps the original all-submerged view, while the coastal
   // scene restores authored Tethys islands for wet/dry and run-up validation.
-  return mix(seabed, height, shoreMix);
+  // Everything fades to the flat deep border before the field edge: exposed
+  // land back to seabed, and the seabed's own dunes down to the -8.5 m floor.
+  // The border row is clamp-repeated to infinity by every out-of-field sample,
+  // so any relief left on it casts a visible shallow-water ray outward; see
+  // the TERRAIN_EXTENT note.
+  let borderFade = 1.0 - smoothstep(245.0, 258.0, max(abs(p.x), abs(p.y)));
+  return mix(-8.5, mix(seabed, height, shoreMix * borderFade), borderFade);
 }
 
 fn hash21(p: vec2<f32>) -> f32 {
@@ -1099,15 +1106,16 @@ fn evaluateWaterSurface(p: vec2<f32>) -> SurfaceEvaluation {
     vec2<u32>(0u, 0u), vec2<u32>(0u, 1u), vec2<u32>(1u, 0u),
     vec2<u32>(0u, 1u), vec2<u32>(1u, 1u), vec2<u32>(1u, 0u)
   );
-  let shoreScene = uniforms.environment.x > 0.5;
   var onHorizonSkirt = false;
-  let resolution = select(${WATER_CLIPMAP_RESOLUTION}u, u32(uniforms.environment.z), shoreScene);
+  let resolution = ${WATER_CLIPMAP_RESOLUTION}u;
   let cellId = vertexId / 6u;
   let cell = vec2<u32>(cellId % resolution, cellId / resolution);
   let grid = cell + corners[vertexId % 6u];
   let uv = vec2<f32>(grid) / f32(resolution);
-  var baseP = (uv - vec2<f32>(0.5)) * uniforms.terrain.x;
-  if (!shoreScene) {
+  // Both scenes share the camera-snapped clipmap: the island scene is the
+  // same open ocean with the authored archipelago exposed at the world centre.
+  var baseP = vec2<f32>(0.0);
+  {
     let level = f32(instanceId);
     let halfExtent = 32.0 * exp2(level);
     let cellSize = halfExtent * 2.0 / f32(resolution);
@@ -1478,7 +1486,7 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
   // dryLand is 0 here: this surface is water, never exposed shore.
   // Underwater is excluded too: that camera is clamped to a ~19 m orbit and
   // already got its murk from the viewDepth blend just above.
-  if (uniforms.environment.x < 0.5 && !underwater) {
+  if (!underwater) {
     color = tethysAerialColor(color, input.world, uniforms.cameraTime.xyz, uniforms.environment.w, false, 0.0);
   }
   return vec4<f32>(linearToSrgb(aces(color)), shorelineCoverage);
@@ -2176,7 +2184,7 @@ export class WebGpuWaterEngine {
 
   private onWheel = (event: WheelEvent) => {
     event.preventDefault();
-    const ceiling = this.options.scene === "shore" ? SHORE_MAX_ORBIT : OPEN_WATER_MAX_ORBIT;
+    const ceiling = OPEN_WATER_MAX_ORBIT;
     this.radius = Math.max(6, Math.min(ceiling, this.radius * Math.exp(event.deltaY * 0.001)));
   };
 
@@ -2213,7 +2221,7 @@ export class WebGpuWaterEngine {
   // How much further than the authored 145 m this scene can see. The island
   // scene is a close-range shoreline study and stays at 1.
   private worldScale() {
-    return this.options.scene === "shore" ? 1 : OPEN_WATER_VIEW_SCALE;
+    return OPEN_WATER_VIEW_SCALE;
   }
 
   private frameState(timestamp: number) {
@@ -2222,7 +2230,7 @@ export class WebGpuWaterEngine {
     const underwater = this.options.view === "underwater";
     const shoreScene = this.options.scene === "shore";
     const target: Vec3 = [0, underwater ? -5.0 : TETHYS_WATER_LEVEL, shoreScene ? 14 : (underwater ? -18 : -22)];
-    const orbitRadius = underwater ? Math.min(this.radius, 19) : (shoreScene ? 96 : this.radius);
+    const orbitRadius = underwater ? Math.min(this.radius, 19) : this.radius;
     const horizontal = Math.cos(this.pitch) * orbitRadius;
     const verticalOrbit = Math.sin(this.pitch) * orbitRadius * (underwater ? 0.22 : 1.0);
     const defaultY = underwater ? -2.0 : 5.2;
@@ -2231,7 +2239,7 @@ export class WebGpuWaterEngine {
     const forward = normalize([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
     const right = normalize(cross(forward, [0, 1, 0]));
     const up = normalize(cross(right, forward));
-    const farPlane = this.options.scene === "shore" ? SHORE_FAR_PLANE : OPEN_WATER_FAR_PLANE;
+    const farPlane = OPEN_WATER_FAR_PLANE;
     const projection = perspective(52 * Math.PI / 180, this.canvas.width / this.canvas.height, 0.12, farPlane);
     const view = lookAt(eye, target);
     const playerAngle = this.elapsedSeconds * 0.22;
@@ -2261,7 +2269,7 @@ export class WebGpuWaterEngine {
     values.set([this.options.scene === "shore" ? 1 : 0, validationMesh, validationMesh, this.worldScale()], 52);
     const waveScale = this.options.waveScale;
     values.set([waveScale, waveScale * waveScale, this.options.distantRoughness, this.options.detailRange], 56);
-    values.set([this.options.scene === "shore" ? 1 : this.options.fogReach, this.options.swellSmoothing, this.options.longCascadeScale, this.options.mediumCascadeScale], 60);
+    values.set([this.options.fogReach, this.options.swellSmoothing, this.options.longCascadeScale, this.options.mediumCascadeScale], 60);
     device.queue.writeBuffer(buffer, 0, values);
     return frame;
   }
@@ -2373,11 +2381,7 @@ export class WebGpuWaterEngine {
       renderPass.setBindGroup(0, this.optimizedWaterBindGroups[this.activeSimulationIndex][this.activeBreakerEventIndex]);
       renderPass.setBindGroup(1, this.optimizedWaterSceneBindGroup);
     }
-    if (this.options.scene === "shore") {
-      renderPass.draw(sceneMeshResolution * sceneMeshResolution * 6);
-    } else {
-      renderPass.draw(WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 6, WATER_CLIPMAP_LEVELS);
-    }
+    renderPass.draw(WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 6, WATER_CLIPMAP_LEVELS);
     const drawBreakerPatch = BREAKER_ENABLED && this.options.scene === "open";
     if (drawBreakerPatch && this.options.mode === "reference") {
       renderPass.setPipeline(this.referenceBreakerPatchPipeline);
@@ -2435,12 +2439,10 @@ export class WebGpuWaterEngine {
       longCascadeScale: this.options.longCascadeScale,
       mediumCascadeScale: this.options.mediumCascadeScale,
       fogReach: this.options.fogReach,
-      triangles: (this.options.scene === "shore"
-        ? 512 * 512 * 4
-        : this.options.meshResolution * this.options.meshResolution * 2
-          + WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 2
-          + (WATER_CLIPMAP_LEVELS - 1) * WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 1.5
-          + (BREAKER_ENABLED ? BREAKER_PATCH_TRIANGLES : 0))
+      triangles: (this.options.scene === "shore" ? 512 * 512 * 2 : this.options.meshResolution * this.options.meshResolution * 2)
+        + WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 2
+        + (WATER_CLIPMAP_LEVELS - 1) * WATER_CLIPMAP_RESOLUTION * WATER_CLIPMAP_RESOLUTION * 1.5
+        + (BREAKER_ENABLED ? BREAKER_PATCH_TRIANGLES : 0)
         + (this.ship?.triangleCount ?? 0),
       simulationBytes: waterSimulationBytes(this.options.simulationResolution),
       simulationSubsteps: this.options.mode === "reference" ? 2 : 1,

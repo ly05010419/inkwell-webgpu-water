@@ -28,8 +28,8 @@
 | `tests/` | — | `nearshore-reference.test.ts`（数值契约）、`water-profiles.test.ts` |
 
 两个验证场景（`WaterScene`）：
-- **`open` 开阔海面**：clipmap 水面 + 淹没的海底沙床，视野被放大 100×（`OPEN_WATER_VIEW_SCALE`），远平面 50 km。
-- **`shore` 岛屿海岸**：固定 512² 单网格水面 + 露出水面的沙丘岛屿，用于干湿边界/爬坡验证，远平面 560 m。
+- **`open` 开阔海面**：clipmap 水面 + 淹没的海底沙床。
+- **`shore` 岛屿海岸**：与 open **同一个大世界**（同 clipmap、同 50 km 远平面、同 100× worldScale、自由缩放），仅 `shoreMix=1` 让中央 520 m 地形场里的四个群岛露出水面（2026-08 统一，此前是 390 m 直径的雾墙小盒子）。
 
 两个渲染模式（`WaterRenderMode`）：`optimized`（1 个模拟子步）/ `reference`（2 个子步 + 更宽的反射采样，作 A/B 对照）。
 
@@ -46,7 +46,7 @@
 | `cameraRight/Up` | xyz=相机基向量，w=tan(fov/2)（Up.w）与其×宽高比（Right.w），供天空 ray 重建与像素尺寸计算 |
 | `cameraForward` | xyz=前向 |
 | `sunWater` | xyz=太阳方向，w=**水位** `TETHYS_WATER_LEVEL = 1.4` |
-| `terrain` | x=地形场覆盖范围 `TERRAIN_EXTENT = 390` m，y=meshResolution，z=simulationResolution，w=是否水下视角 |
+| `terrain` | x=地形场覆盖范围 `TERRAIN_EXTENT = 520` m（1.02 m/texel），y=meshResolution，z=simulationResolution，w=是否水下视角 |
 | `simulation` | xy=模拟域中心 (0, -12)，z=模拟域边长 `TETHYS_WATER_FIELD_SIZE = 192` m，w=1/simulationResolution（texel） |
 | `player` | xy=游泳者位置，zw=速度（驱动尾迹脉冲方向） |
 | `interaction` | x=速度模长，y=1，zw=画布像素宽高 |
@@ -143,9 +143,9 @@ CPU 只需 `draw(resolution² × 6, instanceCount)`。
 
 三角形统计（`getMetrics`，engine:2306）：最内层全画 = 64²·2；外 9 层各挖掉约一半 = ×1.5。
 
-### 4.3 岛屿海岸：单块大网格
+### 4.3 岛屿海岸：与开阔海同一套 clipmap
 
-`shore` 场景不用 clipmap：一张 512×512、铺满 `TERRAIN_EXTENT` 的单实例网格（`environment.x > 0.5` 分支 + engine:2248），因为相机被钉在 96 m 轨道上，不需要远景 LOD。
+2026-08 统一后 `shore` 场景与 open 共用 clipmap 路径（相机也不再钉死 96 m）；唯一差异是 `shoreMix` 让地形露出水面 + 场景捕获折射。**地形场边界纪律**：暴露的陆地和海床起伏都在切比雪夫距离 245–258 m 处渐变回 −8.5 m 平坦深水——边界行会被 clamp 复制到无穷远，任何残留起伏（更别说陆地）都会向场外投射可见的浅水/干地射线。
 
 ### 4.4 地形网格
 
