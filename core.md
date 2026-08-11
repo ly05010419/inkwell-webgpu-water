@@ -52,7 +52,7 @@
 | `interaction` | x=速度模长，y=1，zw=画布像素宽高 |
 | `environment` | x=**是否 shore 场景**（0/1，shader 里大量用它分支），y/z=验证网格分辨率，w=**worldScale**（shore=1，open=100） |
 | `waves` | x=浪高倍率，y=其平方（约束谐波项是波高二次方），z=远景粗糙度回收量，w=细节距离倍率 |
-| `atmosphere` | x=雾距倍率（0=关闭雾墙；shore 场景强制 1） |
+| `atmosphere` | x=雾距倍率（0=关闭雾墙；shore 场景强制 1），y=远景平滑强度（0=关闭），zw=长浪/中浪 cascade 的**实时平铺尺度**（米，默认 240/64；所有消费方必须除以它而非烤死常量） |
 
 ---
 
@@ -64,8 +64,8 @@
 
 | # | 平铺周期 | 波数窗口 | 用途 |
 |---|---|---|---|
-| 0 long | 240 m | 0.024–0.36 | 涌浪，**位移网格** |
-| 1 medium | 64 m | 0.30–1.42 | 风浪，**位移网格** |
+| 0 long | 240 m（默认，滑块 80–480 可调） | 0.024–0.36 | 涌浪，**位移网格** |
+| 1 medium | 64 m（默认，滑块 24–128 可调） | 0.30–1.42 | 风浪，**位移网格** |
 | 2 short | 12 m | 1.22–24.0 | 分米级毛细-重力波，**只参与着色**（进网格会走样成棱纹） |
 
 每个 cascade 分辨率 `SPECTRAL_RESOLUTION = 128`（`SPECTRAL_LOG_SIZE = 7` 级 FFT）。
@@ -138,7 +138,7 @@ CPU 只需 `draw(resolution² × 6, instanceCount)`。
 - **层级尺寸**：`halfExtent = 32 · 2^level` 米（engine:1092）。第 0 层覆盖 ±32 m，第 9 层 ±16384 m。每层分辨率恒为 `WATER_CLIPMAP_RESOLUTION = 64`，因此**格距逐层翻倍**：相机脚下 1 m/格，最外层 512 m/格。层数选 10 是为了在 1450 m 变焦极限处仍能从偏心原点覆盖 1950 m 地形半径（见 engine:150 注释）。
 - **随相机移动 + 按格吸附**（engine:1094）：`snappedCamera = floor(camera.xz / cellSize) · cellSize`。每层按**自己的格距**取整——相机移动时顶点只整格跳变，波形采样点在世界空间不动，杜绝"顶点游泳"。
 - **粗层挖心**（engine:1096–1104）：`instanceId > 0` 时，格中心落在内半径 `halfExtent/2 − cellSize` 以内的格子把 `baseP` 扔到 10000 → 零面积三角形被光栅化丢弃。每个粗层只画细层盖不住的"环"。内半径**故意少一格（underlap）**，让细粗两层重叠一格来遮住 T 型接缝——没有做真正的 T-junction 缝合。
-- **地平线裙边 skirt**（engine:1111–1133）：最外层最外圈顶点沿径向甩到 `WATER_HORIZON_REACH = 20000` m，且在裁剪空间强制 `z = w · 0.99999`——刚好压在天空写的 0.999999 之前。作用：雾墙默认关闭后，没有裙边会看到有限水面方形边缘的切口。约束：20 km 必须大于最外环 16384 m，否则裙边会把几何往里拉。
+- **地平线裙边 skirt**（engine:1111–1133）：最外层最外圈顶点沿径向甩到 `WATER_HORIZON_REACH = 20000` m，用 **w=0 方向投影**（且先把方向的 y 分量压平——否则高空视角下 `atan(相机高度/20 km)` 会把裙边方形的边缘压到真地平线以下露出方角），并在裁剪空间强制 `z = w · 0.99999`——刚好压在天空写的 0.999999 之前。作用：雾墙默认关闭后，没有裙边会看到有限水面方形边缘的切口。约束：20 km 必须大于最外环 16384 m，否则裙边会把几何往里拉。
 - **每层之间没有几何缝**：所有层共用同一个连续的 `evaluateWaterSurface(p)` 世界空间波场函数，层只是采样密度不同。
 
 三角形统计（`getMetrics`，engine:2306）：最内层全画 = 64²·2；外 9 层各挖掉约一半 = ×1.5。
@@ -186,7 +186,7 @@ water pass（计时点 3；画布；depthReadOnly + alpha 混合）:
 
 按顺序：
 1. **岸线覆盖**：用顶点插值来的位移后世界高度减地形高度得水柱厚度，`fwidth` 抗锯齿 smoothstep → alpha；`< 0.01` discard。阈值 shore=0.28（留湿沙边）、open=0.018。地形采样越界**clamp 不 discard**（engine:1226 注释：discard 会在场边界切出锯齿）。
-1.5. **主表面法线逐片元重建（2026-08 修复）**：cascade 0/1 的坡度与近岸模拟坡度混合（`nearshoreOwnership` 那套）在片元里按位移前参数 `surfaceParam` 重新采样重建法线——参数由未 clamp 的 `simulationUv` 仿射反解。此前法线只在顶点上算、片元插值，clipmap 格距逐环翻倍导致几十米外欠采样 64 m cascade，呈现格子大小的菱形面片和环边界"换质感"分界线。几何位移仍是顶点级；breaker patch（surfaceKind>0.5）保留其顶点法线直通。代价 +9 次纹理采样/片元，实测 GPU 渲染 2.18→2.27 ms。
+1.5. **主表面法线逐片元重建（2026-08 修复）**：cascade 0/1 的坡度与近岸模拟坡度混合（`nearshoreOwnership` 那套）在片元里按位移前参数 `surfaceParam` 重新采样重建法线——参数由未 clamp 的 `simulationUv` 仿射反解。此前法线只在顶点上算、片元插值，clipmap 格距逐环翻倍导致几十米外欠采样 64 m cascade，呈现格子大小的菱形面片和环边界"换质感"分界线。几何位移仍是顶点级；breaker patch（surfaceKind>0.5）保留其顶点法线直通。代价 +9 次纹理采样/片元，实测 GPU 渲染 2.18→2.27 ms。**逐片元采样引出的次生问题**：远处一个像素跨多个中浪波长，坡度混叠成地平线下的密集闪光带（顶点插值时代被"意外"抹平）——因此 cascade 0/1 各带一个与毛细波同规格的屏幕采样率淡出（每波长 14 px 起淡、3 px 淡完，代表波长 8 m / 48 m，`detailRange` 同样生效），淡掉的坡度并入 `fadedSlope`→远景粗糙度方差回收路径。**新增每级 cascade 的着色贡献时必须同时给它配采样率淡出，否则远景必闪。**
 2. **毛细细节（cascade 2）与屏幕空间淡出**：判据是 **pixels-per-wavelength**（`(12/12) / 像素世界尺寸`），不是世界距离——1/d 的透视映射让固定距离带在屏幕上塌缩成几十个像素、细节像被"开关"。`detailRange`（细节距离滑块）乘在判据上。淡出的坡度不丢弃：其**方差**按 `waves.z`（远景粗糙度滑块）回收进 Cox-Munk 分布与反射展宽——法线变平滑但 BRDF 保住能量，否则远处水面塌成镜子。
 3. **BRDF**：精确介电 Fresnel（n=1.333，s/p 偏振平均）；太阳闪光 `oceanSunGlitter` 用 **Cox-Munk 净海面坡度分布**（11.5 m/s 风）+ Smith 可见性，`extraVariance` 即回收的毛细方差。
 4. **折射/水体**：法线偏移的屏幕空间折射 UV；Beer-Lambert 吸收 `exp(−(0.37,0.125,0.054)·光程)` + Henyey-Greenstein 相函数的低能量体散射色。shore 浅水处透射直接混向捕获的沙床色（厘米级水不当海洋处理）。
@@ -209,7 +209,7 @@ water pass（计时点 3；画布；depthReadOnly + alpha 混合）:
 ## 8. React / UI 桥
 
 - 组件仅做面板；引擎实例挂在 `window.__WEBGPU_WATER_LAB__`（基准脚本用），每 250 ms 拉一次 `getMetrics()`。
-- URL 参数：`mode / view / scene / mesh / simulation / scale / waves / farRough / detail / fog / fixedTime / yaw / pitch / benchmark / ui`。`fixedTime` 冻结时间用于截图对比；`benchmark=1` 把 DPR 上限压到 1。
+- URL 参数：`mode / view / scene / mesh / simulation / scale / waves / farRough / detail / smooth / longScale / mediumScale / fog / fixedTime / yaw / pitch / benchmark / ui`。调尺度时引擎在 CPU 重新生成该 cascade 的初始频谱并原地覆写纹理（毫秒级，管线不重编译），船体浮力采样尺度同步更新（`ShipRenderer.setCascadeScales`）。`fixedTime` 冻结时间用于截图对比；`benchmark=1` 把 DPR 上限压到 1。
 - 滑块与引擎 setter 一一对应，全部 clamp；`setSimulationResolution` 触发 `allocateFields()` 全量重建纹理与绑定组。
 - 隐藏的 `#webgpu-water-lab-qa` output 元素输出 JSON 指标，`data-ready` 供自动化等待。
 
@@ -223,12 +223,13 @@ water pass（计时点 3；画布；depthReadOnly + alpha 混合）:
 1. **约束谐波公式三处重复**（水面顶点、浅水边界、船浮力）——必须同步。
 2. **WorldUniforms 偏移**手写在 `writeUniforms()`，无反射校验——增删字段要同时改 CPU 偏移和所有 shader。
 3. **breaker 的六个耦合点**必须同开同关，否则水面出透明洞（engine:140 注释；第 6 点是 2026-08 新增的片元法线路径——重新启用 breaker 时必须把其位移导数并进 `waterFragment` 的逐片元法线）。
-4. **clipmap 常量互相约束**：`WATER_HORIZON_REACH(20000) > 最外环(16384)`；skirt 深度必须 < 天空的 0.999999；层数决定的覆盖必须 ≥ 变焦极限 + 地形半径。
-5. **地形场不随 open 场景缩放**（0.76 m/texel 的刻意选择）；场外靠 clamp + 水体吸收兜底。
-6. 片元里对地形**clamp 不 discard**（engine:1226），discard 会切出锯齿边。
-7. 细节淡出用**屏幕空间采样率**不是世界距离（engine:1253 注释），改回距离制会产生"细节开关"突变。
-8. 泡沫淡出的坡度要**回收成 BRDF 方差**，直接丢弃会让远景变镜面。
-9. 双缓冲索引翻转（`activeSimulationIndex`/`activeBreakerEventIndex`）与 2×2 预建绑定组矩阵强耦合，调整子步数时注意翻转次数。
-10. `uncapturederror` 只保留**第一条**错误（后续多是连锁反应，engine:2335）。
-11. **tanh 溢出陷阱（2026-08 实测确认并已修复）**：`adaptiveBreakerCoordinates` 里的 `tanh((across - front) / bandWidth)` 对每个水面顶点执行，clipmap 外圈顶点的 `across` 可达 ±16384，参数 |x| 超过 ~89 时 Metal 的 tanh 通过 `e^x` 溢出产生 `Inf/Inf = NaN`；虽然 breaker 关闭注入了 `× 0.0` 门控，但 **`0 × NaN = NaN`，编译期置零关不住它**。曾经的后果：顺风向约 1.1 km 外的半平面顶点坐标变 NaN → GPU 丢弃三角形 → 远景出现按各层格距量化的阶梯缺口；0.55 m 差分切线采样跨过 NaN 边界 → 法线 NaN → 缺口边缘渲染纯黑方块。现已通过 `tanh(clamp(x, -30.0, 30.0))` 修复。通用教训：**永远不要给 shader 里的 tanh/exp 喂无界参数；`× 0` 不是禁用一段 NaN 风险代码的可靠手段**。
-12. **init() 的 StrictMode 契约**：React dev StrictMode 会挂载→卸载→重挂载组件，被 dispose 的旧引擎的 `init()` 仍在异步执行，会与新引擎争抢同一个 canvas 的 WebGPU context（曾导致 dev 下渲染循环停摆、fps=0）。因此 `init()`/`createResources()` 在**每个 await 之后**都检查 `this.disposed` 并提前返回，组件 effect 用 `cancelled` 标志防止旧 init 的 `.then` 误标 ready。新增 await 时必须在其后补上同样的检查。
+4. **相机拉远上限**：开阔海旧上限 250 m 是给 tanh NaN 海床露出打的补丁（该 bug 修复后已放开到 12000 m，下限 6 m）；上限必须留在 clipmap 覆盖半径 16384 m 以内，且过大时 f32 世界坐标会引入频谱 UV 抖动。
+5. **clipmap 常量互相约束**：`WATER_HORIZON_REACH(20000) > 最外环(16384)`；skirt 深度必须 < 天空的 0.999999；层数决定的覆盖必须 ≥ 变焦极限 + 地形半径。
+6. **地形场不随 open 场景缩放**（0.76 m/texel 的刻意选择）；场外靠 clamp + 水体吸收兜底。
+7. 片元里对地形**clamp 不 discard**（engine:1226），discard 会切出锯齿边。
+8. 细节淡出用**屏幕空间采样率**不是世界距离（engine:1253 注释），改回距离制会产生"细节开关"突变。
+9. 泡沫淡出的坡度要**回收成 BRDF 方差**，直接丢弃会让远景变镜面。
+10. 双缓冲索引翻转（`activeSimulationIndex`/`activeBreakerEventIndex`）与 2×2 预建绑定组矩阵强耦合，调整子步数时注意翻转次数。
+11. `uncapturederror` 只保留**第一条**错误（后续多是连锁反应，engine:2335）。
+12. **tanh 溢出陷阱（2026-08 实测确认并已修复）**：`adaptiveBreakerCoordinates` 里的 `tanh((across - front) / bandWidth)` 对每个水面顶点执行，clipmap 外圈顶点的 `across` 可达 ±16384，参数 |x| 超过 ~89 时 Metal 的 tanh 通过 `e^x` 溢出产生 `Inf/Inf = NaN`；虽然 breaker 关闭注入了 `× 0.0` 门控，但 **`0 × NaN = NaN`，编译期置零关不住它**。曾经的后果：顺风向约 1.1 km 外的半平面顶点坐标变 NaN → GPU 丢弃三角形 → 远景出现按各层格距量化的阶梯缺口；0.55 m 差分切线采样跨过 NaN 边界 → 法线 NaN → 缺口边缘渲染纯黑方块。现已通过 `tanh(clamp(x, -30.0, 30.0))` 修复。通用教训：**永远不要给 shader 里的 tanh/exp 喂无界参数；`× 0` 不是禁用一段 NaN 风险代码的可靠手段**。
+13. **init() 的 StrictMode 契约**：React dev StrictMode 会挂载→卸载→重挂载组件，被 dispose 的旧引擎的 `init()` 仍在异步执行，会与新引擎争抢同一个 canvas 的 WebGPU context（曾导致 dev 下渲染循环停摆、fps=0）。因此 `init()`/`createResources()` 在**每个 await 之后**都检查 `this.disposed` 并提前返回，组件 effect 用 `cancelled` 标志防止旧 init 的 `.then` 误标 ready。新增 await 时必须在其后补上同样的检查。
