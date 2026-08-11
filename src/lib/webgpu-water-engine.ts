@@ -267,7 +267,16 @@ fn terrainHeight(p: vec2<f32>, shoreMix: f32) -> f32 {
   // so any relief left on it casts a visible shallow-water ray outward; see
   // the TERRAIN_EXTENT note.
   let borderFade = 1.0 - smoothstep(245.0, 258.0, max(abs(p.x), abs(p.y)));
-  return mix(-8.5, mix(seabed, height, shoreMix * borderFade), borderFade);
+  var shaped = mix(seabed, height, shoreMix * borderFade);
+  // The authored shelves skirt every island with a 4-6 m bank that reads as a
+  // hard green/blue split from above. Remap everything below the waterline
+  // toward the deep floor (the curve is identity at the waterline and at
+  // -8.5 m, and pushes mid-depths down), so land above water is untouched but
+  // the islands rise from open blue water instead of a turquoise plateau.
+  let submergedRatio = clamp((${TETHYS_WATER_LEVEL.toFixed(1)} - shaped) / ${(TETHYS_WATER_LEVEL + 8.5).toFixed(1)}, 0.0, 1.0);
+  let plunged = ${TETHYS_WATER_LEVEL.toFixed(1)} - ${(TETHYS_WATER_LEVEL + 8.5).toFixed(1)} * pow(submergedRatio, 0.35);
+  shaped = select(shaped, plunged, shaped < ${TETHYS_WATER_LEVEL.toFixed(1)});
+  return mix(-8.5, shaped, borderFade);
 }
 
 fn hash21(p: vec2<f32>) -> f32 {
@@ -1383,7 +1392,15 @@ fn breakerPatchExtra(across: f32, along: f32, time: f32) -> vec3<f32> {
     let capturedScene = textureSample(sceneColorTexture, sceneColorSampler, refractionUv).rgb;
     capturedLinear = pow(max(capturedScene, vec3<f32>(0.0)), vec3<f32>(2.2));
     let capturedGeometry = 1.0 - step(0.9995, capturedDepth);
-    floorColor = mix(floorColor, capturedLinear, capturedGeometry * 0.88);
+    // The capture only contains seabed out to the terrain mesh; past its far
+    // edge the sample falls back to the analytic floor, and the two disagree
+    // enough that the hand-over drew a visible square around the field. The
+    // capture only carries information the analytic floor lacks in shallow
+    // water (caustics, swash, wet sand), so hand over by depth instead: deep
+    // water reads the world-continuous analytic floor on both sides and the
+    // seam never exists.
+    let captureCoverage = 1.0 - smoothstep(6.5, 8.5, depth);
+    floorColor = mix(floorColor, capturedLinear, capturedGeometry * captureCoverage * 0.88);
   }
   let opticalDepth = select(depth / max(ndv, 0.28), max(0.0, uniforms.sunWater.w - uniforms.cameraTime.y) / max(abs(dot(N, V)), 0.32), underwater);
   let absorption = vec3<f32>(0.37, 0.125, 0.054);
