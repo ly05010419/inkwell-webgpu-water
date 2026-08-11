@@ -2053,6 +2053,16 @@ export class WebGpuWaterEngine {
     this.terrainPrepared = false;
     this.activeSimulationIndex = 0;
     this.activeBreakerEventIndex = 0;
+    // The cascade textures were just destroyed and recreated; the hull samples
+    // them for buoyancy and would otherwise submit views of the destroyed ones
+    // on every frame after a scene switch or simulation-resolution change.
+    if (this.ship && this.spectrumSampler) {
+      this.ship.bindSpectralFields(
+        this.spectralFields[0][0][0].createView(),
+        this.spectralFields[1][0][0].createView(),
+        this.spectrumSampler,
+      );
+    }
   }
 
   setMode(mode: WaterRenderMode) { this.options.mode = mode; }
@@ -2198,15 +2208,6 @@ export class WebGpuWaterEngine {
     this.referenceWaterSceneBindGroup = sceneGroup(this.referenceWaterPipeline, "Tethys reference water captured scene");
     this.optimizedBreakerSceneBindGroup = sceneGroup(this.optimizedBreakerPatchPipeline, "Tethys optimized breaker captured scene");
     this.referenceBreakerSceneBindGroup = sceneGroup(this.referenceBreakerPatchPipeline, "Tethys reference breaker captured scene");
-    // The cascade textures above are freshly created; the hull samples them for
-    // buoyancy and would otherwise keep views of the destroyed ones.
-    if (this.ship && this.spectrumSampler) {
-      this.ship.bindSpectralFields(
-        this.spectralFields[0][0][0].createView(),
-        this.spectralFields[1][0][0].createView(),
-        this.spectrumSampler,
-      );
-    }
   }
 
   // How much further than the authored 145 m this scene can see. The island

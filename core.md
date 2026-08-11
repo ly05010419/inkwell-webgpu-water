@@ -202,7 +202,7 @@ water pass（计时点 3；画布；depthReadOnly + alpha 混合）:
 - 渲染：标准 PBR（GGX + 金属度/粗糙度 ARM 贴图），模型无切线属性→片元里用屏幕空间导数重建切线框架；索具处 UV footprint 爆炸时按 `tangentTrust` 退回几何法线（否则出黑点）。半球环境光的天空/水反色调与海面 shader 对齐。
 - 船在 scene pass 中写深度 → water pass 的深度只读合成让吃水线以下自动被水淹没，无需特殊处理。
 - 加载失败不致命：`init()` 里 try/catch，错误串进 adapter 标签展示。
-- 场景切换时 cascade 纹理会重建，`bindSpectralFields()` 必须重新绑定，否则持有已销毁的视图。
+- cascade 纹理在 `allocateFields()`（场景切换、近岸场分辨率调整）中销毁重建，其末尾会调用 `bindSpectralFields()` 重绑船体浮力采样——曾因重绑只写在 `resize()` 里，切场景后每帧报 "Destroyed texture used in a submit"（2026-08 修复）。
 
 ---
 
