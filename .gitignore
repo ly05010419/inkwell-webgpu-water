@@ -30,3 +30,4 @@ benchmarks/visual/*
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
+.vercel

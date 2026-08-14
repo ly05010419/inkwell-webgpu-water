@@ -44,6 +44,8 @@ npm publish
 
 ![Tethys surface](docs/screenshots/tethys-surface-optimized-clean.png)
 
+**在线 Demo：** [https://water.ceo-online.app/](https://water.ceo-online.app/)
+
 ## Run it
 
 ```bash
