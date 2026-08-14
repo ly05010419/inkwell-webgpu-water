@@ -1,5 +1,5 @@
-import { loadGltf, type GltfMaterial, type GltfPrimitive } from "@/lib/gltf-loader";
-import { SHIP_RENDER_SHADER, SHIP_TRANSFORM_SHADER } from "@/lib/ship-shaders";
+import { loadGltf, type GltfMaterial, type GltfPrimitive } from "./gltf-loader";
+import { SHIP_RENDER_SHADER, SHIP_TRANSFORM_SHADER } from "./ship-shaders";
 
 export type ShipPlacement = {
   /** World-space XZ of the waterline centre. */

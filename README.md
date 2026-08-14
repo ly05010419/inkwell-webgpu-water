@@ -2,6 +2,46 @@
 
 A standalone raw-WebGPU study of Inkwell 3D's Tethys water. The default lab renders the water surface and submerged sand; an island-shore stress scene exercises wet/dry boundaries and refraction. There is no grass, motes, spray, splash-particle pass, Three.js, React Three Fiber, or React-owned game-world simulation.
 
+## Library package
+
+The npm package exposes the browser-only WebGPU engine without the Next.js
+demo, React UI, screenshots, benchmarks, or 26 MB demonstration ship asset.
+
+```bash
+npm install @yong/three-webgpu-clouds
+```
+
+```ts
+import { WebGpuWaterEngine } from "@yong/three-webgpu-clouds";
+
+const canvas = document.querySelector<HTMLCanvasElement>("canvas");
+if (!canvas) throw new Error("Missing ocean canvas");
+
+const ocean = new WebGpuWaterEngine(canvas, {
+  scene: "open",
+  waveScale: 1,
+});
+
+await ocean.init();
+
+// Call this when the canvas or owning component is removed.
+ocean.dispose();
+```
+
+All constructor options are optional and merge with
+`DEFAULT_WATER_LAB_OPTIONS`. Pass `shipModelUrl` when your application hosts a
+compatible glTF model; the library default is `null`, so the core renderer has
+no asset-path assumptions. The engine requires a WebGPU-capable browser and
+must be created on the client in frameworks that render on the server.
+
+Maintainers can validate the complete application and inspect the exact npm
+tarball before publishing:
+
+```bash
+npm run release:check
+npm publish
+```
+
 ![Tethys surface](docs/screenshots/tethys-surface-optimized-clean.png)
 
 ![Tethys underwater](docs/screenshots/tethys-underwater-optimized-clean.png)
@@ -60,4 +100,6 @@ The design choices and sources are documented in [`docs/research.md`](docs/resea
 
 ## License
 
-MIT
+MIT. The original copyright and permission notice are retained in
+[`LICENSE`](LICENSE). Demo asset provenance and other acknowledgements are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "noEmit": false,
+    "plugins": []
+  },
+  "include": [
+    "src/index.ts",
+    "src/lib/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "tests"
+  ]
+}

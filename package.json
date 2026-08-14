@@ -1,26 +1,63 @@
 {
-  "name": "inkwell-webgpu-water",
+  "name": "@yong/three-webgpu-clouds",
   "version": "0.1.0",
-  "private": true,
+  "type": "module",
   "description": "A standalone raw WebGPU port of Inkwell's Tethys water biome.",
   "license": "MIT",
+  "author": "James Addison",
+  "contributors": [
+    "Yong Li <ly05010419@gmail.com>"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ly05010419/inkwell-webgpu-water.git"
+  },
+  "homepage": "https://github.com/ly05010419/inkwell-webgpu-water#readme",
+  "bugs": {
+    "url": "https://github.com/ly05010419/inkwell-webgpu-water/issues"
+  },
+  "keywords": [
+    "webgpu",
+    "ocean",
+    "water",
+    "fft",
+    "wgsl",
+    "simulation"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:lib": "tsup src/index.ts --format esm --dts --clean --target es2022 --platform browser --treeshake --tsconfig tsconfig.lib.json",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
     "check": "npm run lint && npm run test && npm run build",
+    "release:check": "npm run check && npm run build:lib && npm pack --dry-run --ignore-scripts",
+    "prepack": "npm run build:lib",
+    "prepublishOnly": "npm run release:check",
     "benchmark": "npm run build && node scripts/benchmark.mjs",
     "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
     "visual:baseline": "npm run build && WATER_VISUAL_BASELINE=1 node scripts/visual-gate.mjs",
     "visual:gate": "npm run build && node scripts/visual-gate.mjs"
   },
-  "dependencies": {
-    "next": "16.3.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^20",
@@ -30,8 +67,12 @@
     "@webgpu/types": "^0.1.71",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "next": "16.3.0",
     "pixelmatch": "^7.2.0",
     "pngjs": "^7.0.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tsup": "^8.5.0",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }

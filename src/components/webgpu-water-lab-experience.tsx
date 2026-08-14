@@ -155,6 +155,7 @@ export function WebGpuWaterLabExperience() {
       benchmark,
       cameraYaw,
       cameraPitch,
+      shipModelUrl: "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf",
     });
     engineRef.current = engine;
     window.__WEBGPU_WATER_LAB__ = {

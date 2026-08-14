@@ -1,7 +1,7 @@
 /// <reference types="@webgpu/types" />
 
-import { ShipRenderer } from "@/lib/ship-renderer";
-import { COLOR_FUNCTIONS, TETHYS_AERIAL_WGSL, WORLD_UNIFORMS } from "@/lib/shared-wgsl";
+import { ShipRenderer } from "./ship-renderer";
+import { COLOR_FUNCTIONS, TETHYS_AERIAL_WGSL, WORLD_UNIFORMS } from "./shared-wgsl";
 import {
   TETHYS_REFERENCE_SIMULATION_RESOLUTION,
   TETHYS_WATER_FIELD_SIZE,
@@ -10,7 +10,7 @@ import {
   type WaterRenderMode,
   type WaterScene,
   type WaterView,
-} from "@/lib/water-profiles";
+} from "./water-profiles";
 
 type Vec3 = [number, number, number];
 
@@ -32,7 +32,27 @@ export type WaterLabOptions = {
   cameraYaw?: number;
   cameraPitch?: number;
   scene: WaterScene;
+  /** Optional glTF hull URL. The core npm package does not ship a model. */
+  shipModelUrl?: string | null;
 };
+
+export const DEFAULT_WATER_LAB_OPTIONS: Readonly<WaterLabOptions> = Object.freeze({
+  mode: "optimized",
+  view: "surface",
+  scene: "open",
+  meshResolution: 240,
+  simulationResolution: 256,
+  renderScale: 1,
+  waveScale: 1,
+  distantRoughness: 0,
+  detailRange: 1,
+  swellSmoothing: 1,
+  longCascadeScale: 240,
+  mediumCascadeScale: 64,
+  fogReach: 0,
+  benchmark: false,
+  shipModelUrl: null,
+});
 
 export type WaterLabMetrics = {
   ready: boolean;
@@ -118,7 +138,6 @@ const MEDIUM_SCALE_RANGE = [24, 128] as const;
 // 0 removes it entirely, which is the default.
 const MAX_FOG_REACH = 3;
 
-const SHIP_MODEL_URL = "/models/dutch_ship_medium/dutch_ship_medium_2k.gltf";
 // The two scenes do not share a seabed: the open ocean's is a submerged shelf
 // while the island scene raises authored dunes above the waterline. A single
 // position would beach the hull in one of them, so each scene gets its own spot
@@ -1797,13 +1816,13 @@ export class WebGpuWaterEngine {
   private disturbanceCount = 0;
   private lastWakeAt = -10;
 
-  constructor(canvas: HTMLCanvasElement, options: WaterLabOptions) {
+  constructor(canvas: HTMLCanvasElement, options: Partial<WaterLabOptions> = {}) {
     this.canvas = canvas;
-    this.options = { ...options };
-    if (options.scene === "shore" && !Number.isFinite(options.cameraYaw)) this.yaw = Math.PI;
-    if (options.scene === "shore" && !Number.isFinite(options.cameraPitch)) this.pitch = 0.22;
-    if (Number.isFinite(options.cameraYaw)) this.yaw = options.cameraYaw!;
-    if (Number.isFinite(options.cameraPitch)) this.pitch = Math.max(-0.24, Math.min(1.08, options.cameraPitch!));
+    this.options = { ...DEFAULT_WATER_LAB_OPTIONS, ...options };
+    if (this.options.scene === "shore" && !Number.isFinite(this.options.cameraYaw)) this.yaw = Math.PI;
+    if (this.options.scene === "shore" && !Number.isFinite(this.options.cameraPitch)) this.pitch = 0.22;
+    if (Number.isFinite(this.options.cameraYaw)) this.yaw = this.options.cameraYaw!;
+    if (Number.isFinite(this.options.cameraPitch)) this.pitch = Math.max(-0.24, Math.min(1.08, this.options.cameraPitch!));
   }
 
   async init() {
@@ -1844,21 +1863,23 @@ export class WebGpuWaterEngine {
     this.resize();
     // The hull is optional scenery: a missing or malformed asset must not take
     // the whole renderer down, so a failure here is surfaced and then skipped.
-    try {
-      this.ship = await ShipRenderer.create({
-        device: this.device,
-        format: this.format,
-        depthFormat: DEPTH_FORMAT,
-        worldUniformBuffer: this.worldUniformBuffer!,
-        longField: this.spectralFields[0][0][0].createView(),
-        mediumField: this.spectralFields[1][0][0].createView(),
-        spectrumSampler: this.spectrumSampler!,
-        cascadeScales: [this.options.longCascadeScale, this.options.mediumCascadeScale],
-        modelUrl: SHIP_MODEL_URL,
-        placement: SHIP_PLACEMENTS[this.options.scene],
-      });
-    } catch (error) {
-      this.shipError = error instanceof Error ? error.message : String(error);
+    if (this.options.shipModelUrl) {
+      try {
+        this.ship = await ShipRenderer.create({
+          device: this.device,
+          format: this.format,
+          depthFormat: DEPTH_FORMAT,
+          worldUniformBuffer: this.worldUniformBuffer!,
+          longField: this.spectralFields[0][0][0].createView(),
+          mediumField: this.spectralFields[1][0][0].createView(),
+          spectrumSampler: this.spectrumSampler!,
+          cascadeScales: [this.options.longCascadeScale, this.options.mediumCascadeScale],
+          modelUrl: this.options.shipModelUrl,
+          placement: SHIP_PLACEMENTS[this.options.scene],
+        });
+      } catch (error) {
+        this.shipError = error instanceof Error ? error.message : String(error);
+      }
     }
     if (this.disposed) {
       this.ship?.dispose();

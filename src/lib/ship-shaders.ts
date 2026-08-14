@@ -1,4 +1,4 @@
-import { COLOR_FUNCTIONS, TETHYS_AERIAL_WGSL, WORLD_UNIFORMS } from "@/lib/shared-wgsl";
+import { COLOR_FUNCTIONS, TETHYS_AERIAL_WGSL, WORLD_UNIFORMS } from "./shared-wgsl";
 
 // The hull rides the same spectral surface the water mesh is built from, so its
 // motion has to be derived from those cascades rather than from an independent
