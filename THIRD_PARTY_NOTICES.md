@@ -1,7 +1,7 @@
 # Third-party notices
 
 This repository includes or references the following third-party work. The
-published `@yong/three-webgpu-clouds` npm package contains only the compiled water
+published `@yong_three/three-water` npm package contains only the compiled water
 engine and does not bundle the demo model or its textures.
 
 ## Dutch Ship Medium

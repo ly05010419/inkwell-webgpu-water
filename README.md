@@ -8,11 +8,11 @@ The npm package exposes the browser-only WebGPU engine without the Next.js
 demo, React UI, screenshots, benchmarks, or 26 MB demonstration ship asset.
 
 ```bash
-npm install @yong/three-webgpu-clouds
+npm install @yong_three/three-water
 ```
 
 ```ts
-import { WebGpuWaterEngine } from "@yong/three-webgpu-clouds";
+import { WebGpuWaterEngine } from "@yong_three/three-water";
 
 const canvas = document.querySelector<HTMLCanvasElement>("canvas");
 if (!canvas) throw new Error("Missing ocean canvas");
@@ -97,6 +97,17 @@ Screenshot capture uses fixed time and a 1600×1000 clean viewport. It preserves
 ## Research
 
 The design choices and sources are documented in [`docs/research.md`](docs/research.md). The short version is: separate wavelengths into simulation cascades, transition unresolved slopes into the BRDF, derive foam from deformation, and reject any procedural pattern that looks pasted onto the water during a full-width screenshot review.
+
+## Acknowledgements
+
+This project builds on [original work by **James
+Addison**](https://github.com/siliconjungle/inkwell-webgpu-water). Many thanks
+to James for creating and sharing the foundation that made this WebGPU water
+study possible. The subsequent modifications, standalone npm packaging, and
+ongoing maintenance are by **Yong Li**.
+
+This is an independently maintained fork and npm distribution. It is not an
+official release by James Addison, nor does it imply his endorsement.
 
 ## License
 

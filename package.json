@@ -1,5 +1,5 @@
 {
-  "name": "@yong/three-webgpu-clouds",
+  "name": "@yong_three/three-water",
   "version": "0.1.0",
   "type": "module",
   "description": "A standalone raw WebGPU port of Inkwell's Tethys water biome.",
