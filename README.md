@@ -44,10 +44,6 @@ npm publish
 
 ![Tethys surface](docs/screenshots/tethys-surface-optimized-clean.png)
 
-![Tethys underwater](docs/screenshots/tethys-underwater-optimized-clean.png)
-
-![Tethys island shoreline](docs/screenshots/tethys-island-shore-clean.png)
-
 ## Run it
 
 ```bash
