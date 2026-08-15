@@ -1,4 +1,4 @@
-import { Mesh, SphereGeometry, Vector2 } from "three";
+import { BufferGeometry, Float32BufferAttribute, Mesh, Vector2, Vector3 } from "three";
 import type { WebGPURenderer } from "three/webgpu";
 import type * as THREE from "three";
 
@@ -12,7 +12,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
   private readonly renderer: WebGPURenderer;
   private readonly radius: number;
   private readonly materialState: ThreeWaterMaterialState;
-  private geometry: THREE.SphereGeometry;
+  private geometry: THREE.BufferGeometry;
   private readonly angularSegments: number;
   private patch: WaterPatchField | null = null;
   private projection: ThreeGlobeWaterOptions["projection"];
@@ -41,11 +41,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
       this._detailRange,
       this._distantRoughness,
     );
-    this.geometry = new SphereGeometry(
-      this.radius,
-      this.angularSegments,
-      this._meshResolution,
-    );
+    this.geometry = createSphericalWindowGeometry(this.radius, this._meshResolution, this.angularSegments);
     this.mesh = new Mesh(this.geometry, this.materialState.material);
     this.mesh.name = "Three globe water";
     this.mesh.frustumCulled = false;
@@ -68,6 +64,8 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     this.materialState.timeNode.value = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     this.waves.update(this.renderer, elapsedSeconds);
     this.mesh.userData.waterCamera = camera;
+    const cameraPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
+    updateSphericalWindow(this.geometry, this.radius, this._meshResolution, this.angularSegments, cameraPosition);
   }
 
   syncPixelScale(camera: THREE.PerspectiveCamera, renderer: WebGPURenderer) {
@@ -151,11 +149,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
   setMeshResolution(value: number) {
     this._meshResolution = Math.max(8, Math.floor(value));
     this.geometry.dispose();
-    this.geometry = new SphereGeometry(
-      this.radius,
-      this.angularSegments,
-      this._meshResolution,
-    );
+    this.geometry = createSphericalWindowGeometry(this.radius, this._meshResolution, this.angularSegments);
     this.mesh.geometry = this.geometry;
     this.mesh.userData.meshResolution = this._meshResolution;
   }
@@ -182,4 +176,65 @@ function positive(value: number, label: string) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
+}
+
+function createSphericalWindowGeometry(radius: number, radialSegments: number, angularSegments: number) {
+  const geometry = new BufferGeometry();
+  const positions = new Float32Array((radialSegments + 1) * (angularSegments + 1) * 3);
+  const normals = new Float32Array(positions.length);
+  const uvs = new Float32Array((radialSegments + 1) * (angularSegments + 1) * 2);
+  const indices: number[] = [];
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+  geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+  for (let row = 0; row < radialSegments; row += 1) {
+    for (let column = 0; column < angularSegments; column += 1) {
+      const a = row * (angularSegments + 1) + column;
+      const b = a + 1;
+      const c = a + angularSegments + 1;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  geometry.setIndex(indices);
+  updateSphericalWindow(geometry, radius, radialSegments, angularSegments, new Vector3(0, 0, radius * 1.02));
+  return geometry;
+}
+
+function updateSphericalWindow(
+  geometry: THREE.BufferGeometry,
+  radius: number,
+  radialSegments: number,
+  angularSegments: number,
+  cameraPosition: THREE.Vector3,
+) {
+  const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
+  const normals = geometry.getAttribute("normal") as THREE.BufferAttribute;
+  const uvs = geometry.getAttribute("uv") as THREE.BufferAttribute;
+  const normal = cameraPosition.clone().normalize();
+  const north = new Vector3(0, 1, 0);
+  const east = north.clone().cross(normal);
+  if (east.lengthSq() < 1e-8) east.set(1, 0, 0);
+  east.normalize();
+  const south = east.clone().cross(normal).normalize();
+  const distance = Math.max(cameraPosition.length(), radius * 1.001);
+  const horizon = Math.acos(Math.min(0.999, radius / distance));
+  const arc = Math.min(Math.PI * 0.98, Math.max(0.22, horizon * 1.22));
+  for (let row = 0; row <= radialSegments; row += 1) {
+    const radial = row / radialSegments;
+    const theta = radial * arc;
+    for (let column = 0; column <= angularSegments; column += 1) {
+      const azimuth = (column / angularSegments) * Math.PI * 2;
+      const tangent = east.clone().multiplyScalar(Math.cos(azimuth)).addScaledVector(south, Math.sin(azimuth));
+      const point = normal.clone().multiplyScalar(Math.cos(theta)).addScaledVector(tangent, Math.sin(theta)).multiplyScalar(radius);
+      const index = row * (angularSegments + 1) + column;
+      positions.setXYZ(index, point.x, point.y, point.z);
+      normals.setXYZ(index, point.x / radius, point.y / radius, point.z / radius);
+      uvs.setXY(index, (Math.atan2(point.x, point.z) / (Math.PI * 2) + 1) % 1, Math.asin(point.y / radius) / Math.PI + 0.5);
+    }
+  }
+  positions.needsUpdate = true;
+  normals.needsUpdate = true;
+  uvs.needsUpdate = true;
+  geometry.computeBoundingSphere();
 }
