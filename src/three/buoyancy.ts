@@ -106,8 +106,9 @@ export class ThreeWaterBuoyancySamplerImpl implements ThreeWaterBuoyancySampler 
   }
 
   dispose() {
-    // BufferAttribute has no GPU ownership; the caller owns any object that
-    // consumes poseBuffer. Clearing references is intentionally unnecessary.
+    this.computeNode.dispose();
+    // StorageBufferAttribute has no renderer ownership; the caller owns any
+    // object that consumes poseBuffer.
   }
 }
 

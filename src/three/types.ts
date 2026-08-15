@@ -60,7 +60,9 @@ export type BuoyancyInput = {
   planarZ: number;
   forwardX: number;
   forwardZ: number;
+  /** Long-wave attenuation supplied by the host shallow-water/LOD state. */
   effLong: number;
+  /** Medium-wave attenuation supplied by the host shallow-water/LOD state. */
   effMedium: number;
   heaveMin: number;
 };

@@ -4,10 +4,11 @@ import {
   color,
   and,
   atan,
+  cos,
   dot,
   float,
   max,
-  normalLocal,
+  mix,
   positionLocal,
   min,
   normalize,
@@ -17,6 +18,7 @@ import {
   vec2,
   vec3,
   select,
+  sin,
   smoothstep,
 } from "three/tsl";
 import type * as THREE from "three";
@@ -38,6 +40,10 @@ export type ThreeWaterMaterialState = {
   sunDirectionNode: { value: Vector3 };
   envRotationNode: { value: Matrix3 };
   swellSmoothingNode: { value: number };
+  windowNormalNode: { value: Vector3 };
+  windowEastNode: { value: Vector3 };
+  windowSouthNode: { value: Vector3 };
+  windowArcNode: { value: number };
   patch: WaterHeightField | null;
 };
 
@@ -64,7 +70,15 @@ export function createWaterMaterial(
   const sunDirectionNode = uniform(new Vector3(0.4, 0.8, 0.2));
   const envRotationNode = uniform(new Matrix3());
   const swellSmoothingNode = uniform(1);
-  const surfacePosition = positionLocal.div(radius);
+  const windowNormalNode = uniform(new Vector3(0, 0, 1));
+  const windowEastNode = uniform(new Vector3(1, 0, 0));
+  const windowSouthNode = uniform(new Vector3(0, -1, 0));
+  const windowArcNode = uniform(0.75);
+  const theta = positionLocal.x.mul(windowArcNode);
+  const azimuth = positionLocal.y.mul(Math.PI * 2);
+  const tangent = windowEastNode.mul(cos(azimuth)).add(windowSouthNode.mul(sin(azimuth)));
+  const surfaceNormal = normalize(windowNormalNode.mul(cos(theta)).add(tangent.mul(sin(theta))));
+  const surfacePosition = surfaceNormal;
   const longitude = atan(surfacePosition.x, surfacePosition.z);
   const latitude = surfacePosition.y.asin();
   const planarX = longitude.sub(projection.lonOrigin ?? 0).mul(projection.metersPerRadianLon);
@@ -101,8 +115,14 @@ export function createWaterMaterial(
   const longSlope = texture(uniformTexture(waves.getCascadeDerivativeTexture(0)), waveUv).rg.mul(waveScaleNode);
   const mediumSlope = texture(uniformTexture(waves.getCascadeDerivativeTexture(1)), waveUv.mul(240 / 64)).rg.mul(waveScaleNode);
   const shortSlope = shortField.rg.mul(waveScaleNode);
+  const longDerivatives = texture(uniformTexture(waves.getCascadeDerivativeTexture(0)), waveUv);
+  const mediumDerivatives = texture(uniformTexture(waves.getCascadeDerivativeTexture(1)), waveUv.mul(240 / 64));
+  const crossDerivative = longDerivatives.a.add(mediumDerivatives.a).mul(waveScaleNode);
+  const horizontalDerivative = longDerivatives.ba.add(mediumDerivatives.ba).mul(waveScaleNode);
+  const jacobian = vec2(1).add(horizontalDerivative).x.mul(vec2(1).add(horizontalDerivative).y).sub(crossDerivative.mul(crossDerivative));
+  const foam = smoothstep(0.0, 0.42, max(0, jacobian.oneMinus())).mul(0.24);
   const fieldHeight = heightNode.mul(detailRangeNode);
-  const sunlight = max(dot(normalLocal, sunDirectionNode), 0).mul(0.25).add(0.75);
+  const sunlight = max(dot(surfaceNormal, sunDirectionNode), 0).mul(0.25).add(0.75);
   const atmosphere = atmosphereNode.mul(0.45).add(0.55);
   const daylight = dayLightNode.mul(0.35).add(0.65);
 
@@ -113,13 +133,13 @@ export function createWaterMaterial(
     transparent: false,
   });
   material.name = "Three Tethys globe water";
-  material.positionNode = positionLocal.add(normalLocal.mul(waveHeight.add(fieldHeight)));
-  material.normalNode = normalize(normalLocal.add(vec3(
+  material.positionNode = surfacePosition.mul(radius).add(surfaceNormal.mul(waveHeight.add(fieldHeight)));
+  material.normalNode = normalize(surfaceNormal.add(vec3(
     longSlope.x.add(mediumSlope.x).add(shortSlope.x.mul(0.4)).negate(),
     0,
     longSlope.y.add(mediumSlope.y).add(shortSlope.y.mul(0.4)).negate(),
   ).mul(0.22)));
-  material.colorNode = color(0x0a8298).mul(sunlight).mul(atmosphere).mul(daylight);
+  material.colorNode = mix(color(0x0a8298), color(0xa6e5df), foam).mul(sunlight).mul(atmosphere).mul(daylight);
   material.roughnessNode = roughnessNode.mul(0.12).add(0.12);
   if (environment) material.envMap = environment;
 
@@ -140,6 +160,10 @@ export function createWaterMaterial(
     sunDirectionNode,
     envRotationNode,
     swellSmoothingNode,
+    windowNormalNode,
+    windowEastNode,
+    windowSouthNode,
+    windowArcNode,
     patch: null,
   };
 }

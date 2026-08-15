@@ -65,7 +65,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     this.materialState.timeNode.value = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     this.mesh.userData.waterCamera = camera;
     const cameraPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
-    updateSphericalWindow(this.geometry, this.radius, this._meshResolution, this.angularSegments, cameraPosition);
+    this.setWindowFrame(cameraPosition);
   }
 
   syncPixelScale(camera: THREE.PerspectiveCamera, renderer: WebGPURenderer) {
@@ -168,6 +168,22 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     // External height/patch/environment textures and the host renderer are
     // intentionally never disposed here.
   }
+
+  private setWindowFrame(cameraPosition: THREE.Vector3) {
+    const normal = cameraPosition.clone().normalize();
+    const north = new Vector3(0, 1, 0);
+    const east = north.clone().cross(normal);
+    if (east.lengthSq() < 1e-8) east.set(1, 0, 0);
+    east.normalize();
+    const south = east.clone().cross(normal).normalize();
+    const distance = Math.max(cameraPosition.length(), this.radius * 1.001);
+    const horizon = Math.acos(Math.min(0.999, this.radius / distance));
+    const arc = Math.min(Math.PI * 0.98, Math.max(0.22, horizon * 1.22));
+    this.materialState.windowNormalNode.value.copy(normal);
+    this.materialState.windowEastNode.value.copy(east);
+    this.materialState.windowSouthNode.value.copy(south);
+    this.materialState.windowArcNode.value = arc;
+  }
 }
 
 export function createThreeGlobeWater(options: ThreeGlobeWaterOptions): ThreeGlobeWaterController {
@@ -202,44 +218,17 @@ function createSphericalWindowGeometry(radius: number, radialSegments: number, a
     }
   }
   geometry.setIndex(indices);
-  updateSphericalWindow(geometry, radius, radialSegments, angularSegments, new Vector3(0, 0, radius * 1.02));
-  return geometry;
-}
-
-function updateSphericalWindow(
-  geometry: THREE.BufferGeometry,
-  radius: number,
-  radialSegments: number,
-  angularSegments: number,
-  cameraPosition: THREE.Vector3,
-) {
-  const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
-  const normals = geometry.getAttribute("normal") as THREE.BufferAttribute;
-  const uvs = geometry.getAttribute("uv") as THREE.BufferAttribute;
-  const normal = cameraPosition.clone().normalize();
-  const north = new Vector3(0, 1, 0);
-  const east = north.clone().cross(normal);
-  if (east.lengthSq() < 1e-8) east.set(1, 0, 0);
-  east.normalize();
-  const south = east.clone().cross(normal).normalize();
-  const distance = Math.max(cameraPosition.length(), radius * 1.001);
-  const horizon = Math.acos(Math.min(0.999, radius / distance));
-  const arc = Math.min(Math.PI * 0.98, Math.max(0.22, horizon * 1.22));
   for (let row = 0; row <= radialSegments; row += 1) {
-    const radial = row / radialSegments;
-    const theta = radial * arc;
     for (let column = 0; column <= angularSegments; column += 1) {
-      const azimuth = (column / angularSegments) * Math.PI * 2;
-      const tangent = east.clone().multiplyScalar(Math.cos(azimuth)).addScaledVector(south, Math.sin(azimuth));
-      const point = normal.clone().multiplyScalar(Math.cos(theta)).addScaledVector(tangent, Math.sin(theta)).multiplyScalar(radius);
       const index = row * (angularSegments + 1) + column;
-      positions.setXYZ(index, point.x, point.y, point.z);
-      normals.setXYZ(index, point.x / radius, point.y / radius, point.z / radius);
-      uvs.setXY(index, (Math.atan2(point.x, point.z) / (Math.PI * 2) + 1) % 1, Math.asin(point.y / radius) / Math.PI + 0.5);
+      positions[index * 3] = row / radialSegments;
+      positions[index * 3 + 1] = column / angularSegments;
+      positions[index * 3 + 2] = 0;
+      normals[index * 3 + 2] = 1;
+      uvs[index * 2] = row / radialSegments;
+      uvs[index * 2 + 1] = column / angularSegments;
     }
   }
-  positions.needsUpdate = true;
-  normals.needsUpdate = true;
-  uvs.needsUpdate = true;
   geometry.computeBoundingSphere();
+  return geometry;
 }
