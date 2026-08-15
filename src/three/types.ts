@@ -1,5 +1,5 @@
 import type * as THREE from "three";
-import type { WebGPURenderer } from "three/webgpu";
+import type { StorageBufferAttribute, WebGPURenderer } from "three/webgpu";
 
 export type WaterHeightField = {
   texture: THREE.Texture;
@@ -10,6 +10,7 @@ export type WaterHeightField = {
 export type WaterPatchField = {
   texture: THREE.Texture;
   bounds: {
+    /** Geographic degrees, matching the host world's LOD metadata. */
     lonMin: number;
     latMin: number;
     lonMax: number;
@@ -65,7 +66,7 @@ export type BuoyancyInput = {
 };
 
 export type ThreeWaterBuoyancySampler = {
-  readonly poseBuffer: THREE.BufferAttribute;
+  readonly poseBuffer: StorageBufferAttribute;
   update(renderer: WebGPURenderer, input: BuoyancyInput): void;
   dispose(): void;
 };

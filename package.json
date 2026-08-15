@@ -1,6 +1,6 @@
 {
   "name": "@yong_three/three-water",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "A standalone raw WebGPU port of Inkwell's Tethys water biome.",
   "license": "MIT",

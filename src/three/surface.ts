@@ -1,17 +1,21 @@
 import { MeshPhysicalNodeMaterial } from "three/webgpu";
-import { Vector4 } from "three";
+import { Matrix3, Vector3, Vector4 } from "three";
 import {
   color,
   and,
+  atan,
+  dot,
+  float,
+  max,
   normalLocal,
   positionLocal,
-  sin,
+  min,
   texture,
   uniformTexture,
   uniform,
-  uv,
   vec2,
   select,
+  smoothstep,
 } from "three/tsl";
 import type * as THREE from "three";
 
@@ -27,6 +31,11 @@ export type ThreeWaterMaterialState = {
   patchTextureNode: ReturnType<typeof uniformTexture>;
   patchBoundsNode: { value: Vector4 };
   patchEnabledNode: { value: number };
+  atmosphereNode: { value: number };
+  dayLightNode: { value: number };
+  sunDirectionNode: { value: Vector3 };
+  envRotationNode: { value: Matrix3 };
+  swellSmoothingNode: { value: number };
   patch: WaterHeightField | null;
 };
 
@@ -37,6 +46,8 @@ export function createWaterMaterial(
   waveScale: number,
   detailRange: number,
   distantRoughness: number,
+  radius: number,
+  projection: { worldSize: number; metersPerRadianLon: number; metersPerRadianLat: number; lonOrigin?: number; latOrigin?: number },
 ): ThreeWaterMaterialState {
   const timeNode = uniform(0);
   const waveScaleNode = uniform(waveScale);
@@ -45,12 +56,20 @@ export function createWaterMaterial(
   const patchTextureNode = uniformTexture(heightField.texture);
   const patchBoundsNode = uniform(new Vector4());
   const patchEnabledNode = uniform(0);
-  const globeUv = uv();
-  const longitude = globeUv.x.mul(Math.PI * 2).sub(Math.PI);
-  const latitude = globeUv.y.sub(0.5).mul(Math.PI);
+  const atmosphereNode = uniform(1);
+  const dayLightNode = uniform(1);
+  const sunDirectionNode = uniform(new Vector3(0.4, 0.8, 0.2));
+  const envRotationNode = uniform(new Matrix3());
+  const swellSmoothingNode = uniform(1);
+  const surfacePosition = positionLocal.div(radius);
+  const longitude = atan(surfacePosition.x, surfacePosition.z);
+  const latitude = surfacePosition.y.asin();
+  const planarX = longitude.sub(projection.lonOrigin ?? 0).mul(projection.metersPerRadianLon);
+  const planarZ = float(projection.latOrigin ?? 0).sub(latitude).mul(projection.metersPerRadianLat);
+  const globalUv = vec2(planarX.div(projection.worldSize).add(0.5), planarZ.div(projection.worldSize).add(0.5));
   const patchUv = vec2(
     longitude.sub(patchBoundsNode.x).div(patchBoundsNode.z.sub(patchBoundsNode.x)),
-    latitude.sub(patchBoundsNode.y).div(patchBoundsNode.w.sub(patchBoundsNode.y)),
+    patchBoundsNode.w.sub(latitude).div(patchBoundsNode.w.sub(patchBoundsNode.y)),
   );
   const patchInside = and(
     longitude.greaterThanEqual(patchBoundsNode.x),
@@ -58,14 +77,23 @@ export function createWaterMaterial(
     latitude.greaterThanEqual(patchBoundsNode.y),
     latitude.lessThanEqual(patchBoundsNode.w),
   );
-  const patchMask = select(patchInside, patchEnabledNode, 0);
-  const globalHeightNode = texture(heightField.texture, globeUv).r;
+  const patchU = longitude.sub(patchBoundsNode.x).div(patchBoundsNode.z.sub(patchBoundsNode.x));
+  const patchV = latitude.sub(patchBoundsNode.y).div(patchBoundsNode.w.sub(patchBoundsNode.y));
+  const edgeDistance = min(min(patchU, patchV), min(patchU.oneMinus(), patchV.oneMinus()));
+  const edgeFade = smoothstep(0, 0.15, edgeDistance);
+  const patchMask = select(patchInside, patchEnabledNode.mul(edgeFade), 0);
+  const globalHeightNode = texture(heightField.texture, globalUv).r;
   const patchHeightNode = texture(patchTextureNode, patchUv).r;
   const heightNode = globalHeightNode.mul(patchMask.oneMinus()).add(patchHeightNode.mul(patchMask));
-  const phase = positionLocal.x.mul(0.019).add(positionLocal.z.mul(0.014)).add(timeNode.mul(0.7));
-  const secondaryPhase = positionLocal.x.mul(-0.041).add(positionLocal.z.mul(0.029)).sub(timeNode.mul(0.43));
-  const waveHeight = sin(phase).mul(1.35).add(sin(secondaryPhase).mul(0.45)).mul(waveScaleNode);
-  const fieldHeight = heightNode.sub(0.5).mul(0.18).mul(detailRangeNode);
+  const waveUv = vec2(planarX.div(240).add(0.5), planarZ.div(240).add(0.5));
+  const wave0 = texture(uniformTexture(waves.getCascadeTexture(0)), waveUv).r;
+  const wave1 = texture(uniformTexture(waves.getCascadeTexture(1)), waveUv.mul(240 / 64)).r;
+  const wave2 = texture(uniformTexture(waves.getCascadeTexture(2)), waveUv.mul(240 / 12)).r;
+  const waveHeight = wave0.add(wave1.mul(0.78)).add(wave2.mul(0.32)).mul(waveScaleNode).mul(swellSmoothingNode);
+  const fieldHeight = heightNode.mul(detailRangeNode);
+  const sunlight = max(dot(normalLocal, sunDirectionNode), 0).mul(0.25).add(0.75);
+  const atmosphere = atmosphereNode.mul(0.45).add(0.55);
+  const daylight = dayLightNode.mul(0.35).add(0.65);
 
   const material = new MeshPhysicalNodeMaterial({
     color: 0x0a8298,
@@ -75,7 +103,7 @@ export function createWaterMaterial(
   });
   material.name = "Three Tethys globe water";
   material.positionNode = positionLocal.add(normalLocal.mul(waveHeight.add(fieldHeight)));
-  material.colorNode = color(0x0a8298);
+  material.colorNode = color(0x0a8298).mul(sunlight).mul(atmosphere).mul(daylight);
   material.roughnessNode = roughnessNode.mul(0.12).add(0.12);
   if (environment) material.envMap = environment;
 
@@ -91,6 +119,11 @@ export function createWaterMaterial(
     patchTextureNode,
     patchBoundsNode,
     patchEnabledNode,
+    atmosphereNode,
+    dayLightNode,
+    sunDirectionNode,
+    envRotationNode,
+    swellSmoothingNode,
     patch: null,
   };
 }

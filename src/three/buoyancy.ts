@@ -1,11 +1,11 @@
-import { BufferAttribute } from "three";
+import { StorageBufferAttribute } from "three/webgpu";
 import type { WebGPURenderer } from "three/webgpu";
 
 import type { ThreeWaterBuoyancySampler, BuoyancyInput, ThreeWaterWaves } from "./types";
 import { ThreeWaterWavesImpl } from "./spectral-waves";
 
 export class ThreeWaterBuoyancySamplerImpl implements ThreeWaterBuoyancySampler {
-  readonly poseBuffer = new BufferAttribute(new Float32Array(4), 4);
+  readonly poseBuffer = new StorageBufferAttribute(new Float32Array(4), 4);
 
   constructor(private readonly waves: ThreeWaterWavesImpl) {}
 

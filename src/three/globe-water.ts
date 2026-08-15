@@ -1,4 +1,4 @@
-import { BufferGeometry, Float32BufferAttribute, Mesh, Vector2, Vector3 } from "three";
+import { BufferGeometry, Float32BufferAttribute, Matrix4, Mesh, Vector2, Vector3 } from "three";
 import type { WebGPURenderer } from "three/webgpu";
 import type * as THREE from "three";
 
@@ -28,9 +28,9 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     this.projection = options.projection;
     this._detailRange = clamp(options.detailRange ?? 1, 0.1, 8);
     this._swellSmoothing = clamp(options.swellSmoothing ?? 1, 0, 3);
-    this._distantRoughness = clamp(options.distantRoughness ?? 0, 0, 3);
-    this._meshResolution = Math.max(8, Math.floor(options.radialSegments ?? 160));
-    this.angularSegments = Math.max(8, Math.floor(options.angularSegments ?? 256));
+    this._distantRoughness = clamp(options.distantRoughness ?? 1, 0, 3);
+    this._meshResolution = Math.max(8, Math.floor(options.radialSegments ?? 256));
+    this.angularSegments = Math.max(8, Math.floor(options.angularSegments ?? 1024));
     this.waves = new ThreeWaterWavesImpl();
     this.waves.setWaveScale(options.waveScale ?? 1);
     this.materialState = createWaterMaterial(
@@ -40,6 +40,8 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
       this.waves.waveScale,
       this._detailRange,
       this._distantRoughness,
+      this.radius,
+      this.projection,
     );
     this.geometry = createSphericalWindowGeometry(this.radius, this._meshResolution, this.angularSegments);
     this.mesh = new Mesh(this.geometry, this.materialState.material);
@@ -56,13 +58,11 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     if (this.disposed) throw new Error("ThreeGlobeWaterController has been disposed");
     // Initialization deliberately does not touch renderer.init(), the canvas,
     // the GPU device, or the render loop. Those belong to the host application.
-    this.waves.update(this.renderer, 0);
   }
 
   update(elapsedSeconds: number, camera: THREE.Camera) {
     if (this.disposed) return;
     this.materialState.timeNode.value = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
-    this.waves.update(this.renderer, elapsedSeconds);
     this.mesh.userData.waterCamera = camera;
     const cameraPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
     updateSphericalWindow(this.geometry, this.radius, this._meshResolution, this.angularSegments, cameraPosition);
@@ -81,11 +81,12 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     this.materialState.patch = patch ? { texture: patch.texture } : null;
     if (patch) {
       this.materialState.patchTextureNode.value = patch.texture;
+      const degreesToRadians = Math.PI / 180;
       this.materialState.patchBoundsNode.value.set(
-        patch.bounds.lonMin,
-        patch.bounds.latMin,
-        patch.bounds.lonMax,
-        patch.bounds.latMax,
+        patch.bounds.lonMin * degreesToRadians,
+        patch.bounds.latMin * degreesToRadians,
+        patch.bounds.lonMax * degreesToRadians,
+        patch.bounds.latMax * degreesToRadians,
       );
       this.materialState.patchEnabledNode.value = 1;
     } else {
@@ -95,19 +96,23 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
   }
 
   setAtmosphere(value: number) {
-    this.mesh.userData.atmosphere = value;
+    this.materialState.atmosphereNode.value = clamp(value, 0, 1);
   }
 
   setDayLight(value: number) {
-    this.mesh.userData.dayLight = value;
+    this.materialState.dayLightNode.value = clamp(value, 0, 1);
   }
 
   setSunDirection(direction: THREE.Vector3) {
-    this.mesh.userData.sunDirection = direction.clone();
+    this.materialState.sunDirectionNode.value.copy(direction).normalize();
   }
 
   setEnvRotation(rotation: THREE.Matrix3) {
-    this.mesh.userData.envRotation = rotation.clone();
+    this.materialState.envRotationNode.value.copy(rotation);
+    if ("envMapRotation" in this.materialState.material) {
+      const matrix = new Matrix4().setFromMatrix3(rotation);
+      (this.materialState.material as unknown as THREE.MeshPhysicalMaterial).envMapRotation.setFromRotationMatrix(matrix);
+    }
   }
 
   setWaveScale(value: number) {
@@ -130,7 +135,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
 
   setSwellSmoothing(value: number) {
     this._swellSmoothing = clamp(value, 0, 3);
-    this.mesh.userData.swellSmoothing = this._swellSmoothing;
+    this.materialState.swellSmoothingNode.value = this._swellSmoothing;
   }
 
   get distantRoughness() {
