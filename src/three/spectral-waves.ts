@@ -188,6 +188,10 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
     return this.gpuCascades[index]?.fields[0][0] ?? this.textures[index] ?? null;
   }
 
+  getCascadeDerivativeTexture(index: number) {
+    return this.gpuCascades[index]?.fields[0][1] ?? this.textures[index] ?? null;
+  }
+
   dispose() {
     for (const texture of this.textures) texture.dispose();
     for (const cascade of this.gpuCascades) {
@@ -351,8 +355,17 @@ function buildGpuSpectrumData(size: number, config: GpuCascadeConfig) {
   const initial = new Float32Array(size * size * 4);
   const initialK = new Float32Array(size * size * 2);
   const waveData = new Float32Array(size * size * 4);
+  const gravity = 9.81;
+  const depth = 54;
+  const windSpeed = 11.5;
+  const fetch = 120_000;
+  const windAngle = -0.48;
+  const peakEnhancement = 3.3;
+  const swell = 0.38;
   const random = seededRandom(config.seed);
   const deltaK = (Math.PI * 2) / config.lengthScale;
+  const alpha = 0.076 * Math.pow(gravity * fetch / (windSpeed * windSpeed), -0.22);
+  const peakOmega = 22 * Math.pow(windSpeed * fetch / (gravity * gravity), -0.33);
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
       const kx = (x - size / 2) * deltaK;
@@ -363,15 +376,46 @@ function buildGpuSpectrumData(size: number, config: GpuCascadeConfig) {
         waveData[offset + 1] = 1;
         continue;
       }
-      const omega = Math.sqrt(9.81 * k * Math.tanh(Math.min(k * 54, 20)));
-      const peak = 0.72;
-      const sigma = omega <= peak ? 0.07 : 0.09;
-      const jonswap = Math.exp(-1.25 * Math.pow(peak / Math.max(omega, 1e-4), 4))
-        * Math.pow(3.3, Math.exp(-0.5 * Math.pow((omega - peak) / (sigma * peak), 2)))
-        / Math.pow(Math.max(omega, 1e-4), 5);
-      const direction = Math.pow(Math.max(Math.cos(Math.atan2(kz, kx) + 0.48), 0), 2);
-      const amplitude = Math.sqrt(Math.max(0, 2 * jonswap * direction * deltaK * deltaK / k))
-        * config.amplitudeScale * (1 + config.secondaryScale * 0.35);
+      const kh = Math.min(k * depth, 20);
+      const tanhKh = Math.tanh(kh);
+      const omega = Math.sqrt(gravity * k * tanhKh);
+      const sechSquared = 1 - tanhKh * tanhKh;
+      const frequencyDerivative = gravity * (depth * k * sechSquared + tanhKh) / Math.max(omega * 2, 1e-5);
+      const omegaH = omega * Math.sqrt(depth / gravity);
+      const tma = omegaH <= 1 ? 0.5 * omegaH * omegaH : omegaH < 2 ? 1 - 0.5 * (2 - omegaH) * (2 - omegaH) : 1;
+      const sigma = omega <= peakOmega ? 0.07 : 0.09;
+      const peakDistance = (omega - peakOmega) / Math.max(sigma * peakOmega, 1e-5);
+      const peakShape = Math.exp(-0.5 * peakDistance * peakDistance);
+      const peakRatio = peakOmega / omega;
+      const jonswap = tma * alpha * gravity * gravity / Math.pow(omega, 5)
+        * Math.exp(-1.25 * Math.pow(peakRatio, 4)) * Math.pow(peakEnhancement, peakShape);
+      const theta = wrapAngle(Math.atan2(kz, kx) - windAngle);
+      const omegaRatio = omega / peakOmega;
+      const spreadPower = ((omega > peakOmega ? 9.77 * Math.pow(omegaRatio, -2.5) : 6.97 * Math.pow(omegaRatio, 5))
+        + 16 * Math.tanh(Math.min(omegaRatio, 20)) * swell * swell) * 0.58;
+      const focusedDirection = spectrumNormalisationFactor(spreadPower) * Math.pow(Math.abs(Math.cos(theta * 0.5)), 2 * spreadPower);
+      const broadDirection = 2 / Math.PI * Math.pow(Math.max(Math.cos(theta), 0), 2);
+      const direction = focusedDirection * 0.68 + broadDirection * 0.32;
+      const shortWaveFade = Math.exp(-0.00016 * k * k);
+      let spectralDensity = jonswap * direction * shortWaveFade;
+      if (config.secondaryScale > 0) {
+        const swellWindSpeed = 8.4;
+        const swellFetch = 310_000;
+        const swellPeakOmega = 22 * Math.pow(swellWindSpeed * swellFetch / (gravity * gravity), -0.33);
+        const swellAlpha = 0.076 * Math.pow(gravity * swellFetch / (swellWindSpeed * swellWindSpeed), -0.22);
+        const swellSigma = omega <= swellPeakOmega ? 0.07 : 0.09;
+        const swellPeakDistance = (omega - swellPeakOmega) / Math.max(swellSigma * swellPeakOmega, 1e-5);
+        const swellPeakShape = Math.exp(-0.5 * swellPeakDistance * swellPeakDistance);
+        const swellPeakRatio = swellPeakOmega / omega;
+        const swellSpectrum = tma * swellAlpha * gravity * gravity / Math.pow(omega, 5)
+          * Math.exp(-1.25 * Math.pow(swellPeakRatio, 4)) * Math.pow(2.6, swellPeakShape);
+        const swellTheta = wrapAngle(Math.atan2(kz, kx) - (windAngle + 0.82));
+        const swellRatio = omega / swellPeakOmega;
+        const swellSpread = ((omega > swellPeakOmega ? 9.77 * Math.pow(swellRatio, -2.5) : 6.97 * Math.pow(swellRatio, 5)) + 9.0) * 0.72;
+        const swellDirection = spectrumNormalisationFactor(swellSpread) * Math.pow(Math.abs(Math.cos(swellTheta * 0.5)), 2 * swellSpread);
+        spectralDensity += swellSpectrum * swellDirection * shortWaveFade * config.secondaryScale;
+      }
+      const amplitude = Math.sqrt(Math.max(0, 2 * spectralDensity * Math.abs(frequencyDerivative) / k * deltaK * deltaK)) * config.amplitudeScale;
       const gaussian = gaussianPair(random);
       const pixel = y * size + x;
       initialK[pixel * 2] = gaussian[0] * amplitude;
@@ -421,4 +465,17 @@ function gaussianPair(random: () => number) {
   const radius = Math.sqrt(-2 * Math.log(u));
   const angle = Math.PI * 2 * v;
   return [radius * Math.cos(angle), radius * Math.sin(angle)] as const;
+}
+
+function wrapAngle(value: number) {
+  return ((value + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+}
+
+function spectrumNormalisationFactor(spread: number) {
+  const s2 = spread * spread;
+  const s3 = s2 * spread;
+  const s4 = s3 * spread;
+  return spread < 5
+    ? -0.000564 * s4 + 0.00776 * s3 - 0.044 * s2 + 0.192 * spread + 0.163
+    : -4.8e-8 * s4 + 1.07e-5 * s3 - 9.53e-4 * s2 + 5.9e-2 * spread + 0.393;
 }

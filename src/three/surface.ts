@@ -10,10 +10,12 @@ import {
   normalLocal,
   positionLocal,
   min,
+  normalize,
   texture,
   uniformTexture,
   uniform,
   vec2,
+  vec3,
   select,
   smoothstep,
 } from "three/tsl";
@@ -87,10 +89,18 @@ export function createWaterMaterial(
   const patchHeightNode = texture(patchTextureNode, patchUv).r;
   const heightNode = globalHeightNode.mul(patchMask.oneMinus()).add(patchHeightNode.mul(patchMask));
   const waveUv = vec2(planarX.div(240).add(0.5), planarZ.div(240).add(0.5));
-  const wave0 = texture(uniformTexture(waves.getCascadeTexture(0)), waveUv).b;
-  const wave1 = texture(uniformTexture(waves.getCascadeTexture(1)), waveUv.mul(240 / 64)).b;
-  const wave2 = texture(uniformTexture(waves.getCascadeTexture(2)), waveUv.mul(240 / 12)).b;
-  const waveHeight = wave0.add(wave1.mul(0.78)).add(wave2.mul(0.32)).mul(waveScaleNode).mul(swellSmoothingNode);
+  const longField = texture(uniformTexture(waves.getCascadeTexture(0)), waveUv);
+  const mediumField = texture(uniformTexture(waves.getCascadeTexture(1)), waveUv.mul(240 / 64));
+  const shortField = texture(uniformTexture(waves.getCascadeTexture(2)), waveUv.mul(240 / 12));
+  const longHeight = longField.b.mul(waveScaleNode);
+  const mediumHeight = mediumField.b.mul(waveScaleNode);
+  const waveHeight = longHeight.add(mediumHeight)
+    .add(longHeight.mul(longHeight).sub(waveScaleNode.mul(0.08)).mul(0.14))
+    .add(mediumHeight.mul(mediumHeight).sub(waveScaleNode.mul(0.03)).mul(0.32))
+    .mul(swellSmoothingNode);
+  const longSlope = texture(uniformTexture(waves.getCascadeDerivativeTexture(0)), waveUv).rg.mul(waveScaleNode);
+  const mediumSlope = texture(uniformTexture(waves.getCascadeDerivativeTexture(1)), waveUv.mul(240 / 64)).rg.mul(waveScaleNode);
+  const shortSlope = shortField.rg.mul(waveScaleNode);
   const fieldHeight = heightNode.mul(detailRangeNode);
   const sunlight = max(dot(normalLocal, sunDirectionNode), 0).mul(0.25).add(0.75);
   const atmosphere = atmosphereNode.mul(0.45).add(0.55);
@@ -104,6 +114,11 @@ export function createWaterMaterial(
   });
   material.name = "Three Tethys globe water";
   material.positionNode = positionLocal.add(normalLocal.mul(waveHeight.add(fieldHeight)));
+  material.normalNode = normalize(normalLocal.add(vec3(
+    longSlope.x.add(mediumSlope.x).add(shortSlope.x.mul(0.4)).negate(),
+    0,
+    longSlope.y.add(mediumSlope.y).add(shortSlope.y.mul(0.4)).negate(),
+  ).mul(0.22)));
   material.colorNode = color(0x0a8298).mul(sunlight).mul(atmosphere).mul(daylight);
   material.roughnessNode = roughnessNode.mul(0.12).add(0.12);
   if (environment) material.envMap = environment;
