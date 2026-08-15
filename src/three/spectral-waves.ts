@@ -18,6 +18,7 @@ import {
   vec4,
 } from "three/tsl";
 import type Node from "three/src/nodes/core/Node.js";
+import type UniformNode from "three/src/nodes/core/UniformNode.js";
 import type { WebGPURenderer } from "three/webgpu";
 
 import type { ThreeWaterCascade, ThreeWaterWaves } from "./types";
@@ -53,7 +54,11 @@ const DIRECTIONS = [
 ] as const;
 
 class MutableCascade implements ThreeWaterCascade {
-  constructor(private length = 1, private readonly waveChoppiness = 1) {}
+  readonly scaleUniform: UniformNode<"float", number>;
+
+  constructor(private length = 1, private readonly waveChoppiness = 1) {
+    this.scaleUniform = uniform(length, "float");
+  }
 
   get lengthScale() {
     return this.length;
@@ -65,6 +70,7 @@ class MutableCascade implements ThreeWaterCascade {
 
   setLengthScale(value: number) {
     this.length = clamp(value, 1, 10000);
+    this.scaleUniform.value = this.length;
   }
 }
 
@@ -80,6 +86,11 @@ export type WaveSample = {
   height: number;
   slopeX: number;
   slopeZ: number;
+  displacementX: number;
+  displacementZ: number;
+  crossDerivative: number;
+  horizontalDerivativeX: number;
+  horizontalDerivativeZ: number;
 };
 
 export class ThreeWaterWavesImpl implements ThreeWaterWaves {
@@ -87,7 +98,7 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
   private readonly fields: Float32Array[];
   private readonly textures: DataTexture[];
   private readonly gpuCascades: GpuCascade[];
-  private readonly timeNode = uniform(0);
+  private readonly timeNode = uniform(0, "float");
   private readonly waveScaleNode = uniform(1, "float");
   private _waveScale = 1;
   private elapsedSeconds = 0;
@@ -116,6 +127,10 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
 
   getWaveScaleNode() {
     return this.waveScaleNode;
+  }
+
+  getCascadeScaleNode(index: number) {
+    return this.cascades[index]?.scaleUniform ?? uniform(1, "float");
   }
 
   setCascadeTiling(index: number, lengthScale: number) {
@@ -156,6 +171,11 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
     let height = 0;
     let slopeX = 0;
     let slopeZ = 0;
+    let displacementX = 0;
+    let displacementZ = 0;
+    let crossDerivative = 0;
+    let horizontalDerivativeX = 0;
+    let horizontalDerivativeZ = 0;
 
     for (let cascadeIndex = 0; cascadeIndex < CASCADE_CONFIG.length; cascadeIndex += 1) {
       const config = CASCADE_CONFIG[cascadeIndex];
@@ -172,7 +192,19 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
       const s0 = Math.sin(p0 * k + phase + base);
       const s1 = Math.sin(p1 * k * 1.73 - phase * 1.21 - base * 0.7);
       const s2 = Math.sin(p2 * k * 0.61 + phase * 0.47 + base * 1.3);
-      height += a * (s0 * 0.57 + s1 * 0.29 + s2 * 0.14);
+      const localHeight = a * (s0 * 0.57 + s1 * 0.29 + s2 * 0.14);
+      height += localHeight;
+      if (cascadeIndex < 2) {
+        const dx = a * config.choppiness * (direction[0] * (0.57 * Math.cos(p0 * k + phase + base))
+          + direction[2] * (0.29 * 1.73 * Math.cos(p1 * k * 1.73 - phase * 1.21 - base * 0.7)));
+        const dz = a * config.choppiness * (direction[1] * (0.57 * Math.cos(p0 * k + phase + base))
+          + direction[3] * (0.29 * 1.73 * Math.cos(p1 * k * 1.73 - phase * 1.21 - base * 0.7)));
+        displacementX += dx;
+        displacementZ += dz;
+        crossDerivative += a * config.choppiness * k * (direction[0] * direction[1]) * 0.25;
+        horizontalDerivativeX += a * config.choppiness * k * direction[0] * 0.22;
+        horizontalDerivativeZ += a * config.choppiness * k * direction[1] * 0.22;
+      }
       slopeX += a * k * (direction[0] * 0.57 * Math.cos(p0 * k + phase + base)
         + direction[2] * 1.73 * 0.29 * Math.cos(p1 * k * 1.73 - phase * 1.21 - base * 0.7)
         + (direction[0] - direction[2]) * 0.61 * 0.14 * Math.cos(p2 * k * 0.61 + phase * 0.47 + base * 1.3));
@@ -181,7 +213,20 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
         + (direction[1] + direction[3]) * 0.61 * 0.14 * Math.cos(p2 * k * 0.61 + phase * 0.47 + base * 1.3));
     }
 
-    return { height, slopeX, slopeZ };
+    const longHeight = this.cascadeApproxHeight(planarX, planarZ, 0, this.cascades[0].lengthScale, longScale);
+    const mediumHeight = this.cascadeApproxHeight(planarX, planarZ, 1, this.cascades[1].lengthScale, mediumScale);
+    height += 0.14 * (longHeight * longHeight - 0.080 * this._waveScale * this._waveScale)
+      + 0.32 * (mediumHeight * mediumHeight - 0.030 * this._waveScale * this._waveScale);
+    return {
+      height,
+      slopeX,
+      slopeZ,
+      displacementX,
+      displacementZ,
+      crossDerivative,
+      horizontalDerivativeX,
+      horizontalDerivativeZ,
+    };
   }
 
   getCascadeTexture(index: number) {
@@ -250,6 +295,18 @@ export class ThreeWaterWavesImpl implements ThreeWaterWaves {
       }
       this.textures[cascadeIndex].needsUpdate = true;
     }
+  }
+
+  private cascadeApproxHeight(planarX: number, planarZ: number, cascadeIndex: number, lengthScale: number, attenuation: number) {
+    const config = CASCADE_CONFIG[cascadeIndex];
+    const direction = DIRECTIONS[cascadeIndex];
+    const k = (Math.PI * 2) / lengthScale;
+    const phase = this.elapsedSeconds * (0.52 + cascadeIndex * 0.17);
+    const base = config.seed * 13.7;
+    const p0 = planarX * direction[0] + planarZ * direction[1];
+    const p1 = planarX * direction[2] + planarZ * direction[3];
+    return config.amplitudeScale * this._waveScale * attenuation
+      * (Math.sin(p0 * k + phase + base) * 0.57 + Math.sin(p1 * k * 1.73 - phase * 1.21 - base * 0.7) * 0.29);
   }
 }
 

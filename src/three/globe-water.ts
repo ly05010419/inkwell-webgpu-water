@@ -65,6 +65,7 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     this.materialState.timeNode.value = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
     this.mesh.userData.waterCamera = camera;
     const cameraPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
+    this.materialState.cameraPositionNode.value.copy(cameraPosition);
     this.setWindowFrame(cameraPosition);
   }
 
@@ -72,8 +73,12 @@ export class ThreeGlobeWaterControllerImpl implements ThreeGlobeWaterController 
     if (this.disposed) return;
     const size = new Vector2();
     renderer.getDrawingBufferSize(size);
-    const pixelScale = Math.max(0.25, Math.min(4, size.y / Math.max(camera.projectionMatrix.elements[5], 1e-6) / this.radius));
-    this.materialState.detailRangeNode.value = this._detailRange * pixelScale;
+    const focal = Math.max(camera.projectionMatrix.elements[5], 1e-6);
+    // Raw Tethys uses pixelWorldSize = distance * 2 / focal / viewportHeight.
+    // Keep that scale in a separate uniform: detailRange remains the host's
+    // logical distance multiplier and never leaks into seabed height.
+    this.materialState.pixelWorldScaleNode.value = 2 / focal / Math.max(size.y, 1);
+    this.materialState.detailRangeNode.value = this._detailRange;
   }
 
   setPatch(patch: WaterPatchField | null) {
@@ -205,9 +210,6 @@ function createSphericalWindowGeometry(radius: number, radialSegments: number, a
   const normals = new Float32Array(positions.length);
   const uvs = new Float32Array((radialSegments + 1) * (angularSegments + 1) * 2);
   const indices: number[] = [];
-  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
-  geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
   for (let row = 0; row < radialSegments; row += 1) {
     for (let column = 0; column < angularSegments; column += 1) {
       const a = row * (angularSegments + 1) + column;
@@ -229,6 +231,12 @@ function createSphericalWindowGeometry(radius: number, radialSegments: number, a
       uvs[index * 2 + 1] = column / angularSegments;
     }
   }
+  // Float32BufferAttribute copies the supplied array in Three.js r184. Fill
+  // the typed arrays before creating attributes, otherwise every vertex stays
+  // at the origin and the adapter appears to render a blank scene.
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+  geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
   geometry.computeBoundingSphere();
   return geometry;
 }

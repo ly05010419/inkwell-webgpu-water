@@ -25,6 +25,11 @@ describe("Three.js compatibility entry point", () => {
     await water.init();
     expect(water.mesh.name).toBe("Three globe water");
     expect(water.waves.cascades.map((cascade) => cascade.lengthScale)).toEqual([240, 64, 12]);
+    expect(water.waves.cascades.map((cascade) => cascade.scaleUniform.value)).toEqual([240, 64, 12]);
+    water.waves.setCascadeTiling(0, 480);
+    water.waves.setCascadeScale(1, 96);
+    expect(water.waves.cascades.map((cascade) => cascade.lengthScale)).toEqual([480, 96, 12]);
+    expect(water.waves.cascades.map((cascade) => cascade.scaleUniform.value)).toEqual([480, 96, 12]);
 
     water.setPatch({
       texture: patchTexture,

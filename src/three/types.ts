@@ -1,5 +1,6 @@
 import type * as THREE from "three";
 import type { StorageBufferAttribute, WebGPURenderer } from "three/webgpu";
+import type UniformNode from "three/src/nodes/core/UniformNode.js";
 
 export type WaterHeightField = {
   texture: THREE.Texture;
@@ -43,6 +44,8 @@ export type ThreeGlobeWaterOptions = {
 export type ThreeWaterCascade = {
   readonly lengthScale: number;
   readonly choppiness: number;
+  /** Live TSL uniform used by both the surface and buoyancy samplers. */
+  readonly scaleUniform: UniformNode<"float", number>;
 };
 
 export type ThreeWaterWaves = {

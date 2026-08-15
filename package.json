@@ -1,6 +1,6 @@
 {
   "name": "@yong_three/three-water",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Raw WebGPU and Three.js WebGPU-compatible Tethys water surfaces.",
   "license": "MIT",
