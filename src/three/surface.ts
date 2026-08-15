@@ -85,8 +85,8 @@ export function createWaterMaterial(
   const planarZ = float(projection.latOrigin ?? 0).sub(latitude).mul(projection.metersPerRadianLat);
   const globalUv = vec2(planarX.div(projection.worldSize).add(0.5), planarZ.div(projection.worldSize).add(0.5));
   const patchUv = vec2(
-    longitude.sub(patchBoundsNode.x).div(patchBoundsNode.z.sub(patchBoundsNode.x)),
-    patchBoundsNode.w.sub(latitude).div(patchBoundsNode.w.sub(patchBoundsNode.y)),
+    longitude.sub(patchBoundsNode.x).div(max(patchBoundsNode.z.sub(patchBoundsNode.x), 1e-5)),
+    patchBoundsNode.w.sub(latitude).div(max(patchBoundsNode.w.sub(patchBoundsNode.y), 1e-5)),
   );
   const patchInside = and(
     longitude.greaterThanEqual(patchBoundsNode.x),
@@ -94,8 +94,8 @@ export function createWaterMaterial(
     latitude.greaterThanEqual(patchBoundsNode.y),
     latitude.lessThanEqual(patchBoundsNode.w),
   );
-  const patchU = longitude.sub(patchBoundsNode.x).div(patchBoundsNode.z.sub(patchBoundsNode.x));
-  const patchV = latitude.sub(patchBoundsNode.y).div(patchBoundsNode.w.sub(patchBoundsNode.y));
+  const patchU = longitude.sub(patchBoundsNode.x).div(max(patchBoundsNode.z.sub(patchBoundsNode.x), 1e-5));
+  const patchV = latitude.sub(patchBoundsNode.y).div(max(patchBoundsNode.w.sub(patchBoundsNode.y), 1e-5));
   const edgeDistance = min(min(patchU, patchV), min(patchU.oneMinus(), patchV.oneMinus()));
   const edgeFade = smoothstep(0, 0.15, edgeDistance);
   const patchMask = select(patchInside, patchEnabledNode.mul(edgeFade), 0);
