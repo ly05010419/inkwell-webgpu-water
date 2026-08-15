@@ -50,7 +50,8 @@ export function createWaterMaterial(
   projection: { worldSize: number; metersPerRadianLon: number; metersPerRadianLat: number; lonOrigin?: number; latOrigin?: number },
 ): ThreeWaterMaterialState {
   const timeNode = uniform(0);
-  const waveScaleNode = uniform(waveScale);
+  const waveScaleNode = waves.getWaveScaleNode();
+  waveScaleNode.value = waveScale;
   const detailRangeNode = uniform(detailRange);
   const roughnessNode = uniform(distantRoughness);
   const patchTextureNode = uniformTexture(heightField.texture);
@@ -86,9 +87,9 @@ export function createWaterMaterial(
   const patchHeightNode = texture(patchTextureNode, patchUv).r;
   const heightNode = globalHeightNode.mul(patchMask.oneMinus()).add(patchHeightNode.mul(patchMask));
   const waveUv = vec2(planarX.div(240).add(0.5), planarZ.div(240).add(0.5));
-  const wave0 = texture(uniformTexture(waves.getCascadeTexture(0)), waveUv).r;
-  const wave1 = texture(uniformTexture(waves.getCascadeTexture(1)), waveUv.mul(240 / 64)).r;
-  const wave2 = texture(uniformTexture(waves.getCascadeTexture(2)), waveUv.mul(240 / 12)).r;
+  const wave0 = texture(uniformTexture(waves.getCascadeTexture(0)), waveUv).b;
+  const wave1 = texture(uniformTexture(waves.getCascadeTexture(1)), waveUv.mul(240 / 64)).b;
+  const wave2 = texture(uniformTexture(waves.getCascadeTexture(2)), waveUv.mul(240 / 12)).b;
   const waveHeight = wave0.add(wave1.mul(0.78)).add(wave2.mul(0.32)).mul(waveScaleNode).mul(swellSmoothingNode);
   const fieldHeight = heightNode.mul(detailRangeNode);
   const sunlight = max(dot(normalLocal, sunDirectionNode), 0).mul(0.25).add(0.75);

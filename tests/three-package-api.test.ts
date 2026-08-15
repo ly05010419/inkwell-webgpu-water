@@ -50,4 +50,27 @@ describe("Three.js compatibility entry point", () => {
     expect(patchTexture.source.data).toBeNull();
     buoyancy.dispose();
   });
+
+  it("schedules the shared GPU wave graph through the host renderer", () => {
+    let calls = 0;
+    const renderer = {
+      backend: { isWebGPUBackend: true },
+      compute() {
+        calls += 1;
+      },
+    } as never;
+    const water = createThreeGlobeWater({
+      renderer,
+      radius: 100,
+      heightField: { texture: new Texture() },
+      projection: {
+        worldSize: 4096,
+        metersPerRadianLon: 6371000,
+        metersPerRadianLat: 6371000,
+      },
+    });
+    water.waves.update(renderer, 1);
+    expect(calls).toBe(1);
+    water.dispose();
+  });
 });
