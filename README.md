@@ -28,6 +28,44 @@ await ocean.init();
 ocean.dispose();
 ```
 
+For an existing Three.js WebGPU scene, use the compatibility entry point. It
+reuses the host renderer, device, canvas, scene, and render loop; it does not
+create any of them:
+
+```bash
+npm install three @yong_three/three-water
+```
+
+```ts
+import { createThreeGlobeWater, createBuoyancySampler } from
+  "@yong_three/three-water/three";
+
+const ocean = createThreeGlobeWater({
+  renderer,
+  radius: GLOBE_RADIUS,
+  heightField,
+  projection: {
+    worldSize: WORLD_SIZE,
+    metersPerRadianLon: M_PER_RAD_LON,
+    metersPerRadianLat: M_PER_RAD_LAT,
+  },
+  environment: skyEnv.environment,
+});
+
+await ocean.init();
+scene.add(ocean.mesh);
+const buoyancy = createBuoyancySampler(ocean.waves);
+
+// The host application owns the frame loop and calls these each frame.
+ocean.waves.update(renderer, elapsed);
+ocean.update(elapsed, camera);
+buoyancy.update(renderer, shipInput);
+```
+
+The Three.js adapter declares `three` as a peer dependency (`>=0.184.0 <0.185.0`).
+Textures supplied through `heightField`, `setPatch`, or `environment` remain
+owned by the calling application and are not disposed by `ocean.dispose()`.
+
 All constructor options are optional and merge with
 `DEFAULT_WATER_LAB_OPTIONS`. Pass `shipModelUrl` when your application hosts a
 compatible glTF model; the library default is `null`, so the core renderer has

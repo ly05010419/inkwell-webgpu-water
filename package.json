@@ -1,6 +1,6 @@
 {
   "name": "@yong_three/three-water",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "A standalone raw WebGPU port of Inkwell's Tethys water biome.",
   "license": "MIT",
@@ -32,6 +32,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./three": {
+      "types": "./dist/three/index.d.ts",
+      "import": "./dist/three/index.js"
     }
   },
   "files": [
@@ -44,7 +48,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:lib": "tsup src/index.ts --format esm --dts --clean --target es2022 --platform browser --treeshake --tsconfig tsconfig.lib.json",
+    "build:lib": "tsup src/index.ts src/three/index.ts src/three/globe-water.ts src/three/spectral-waves.ts src/three/buoyancy.ts src/three/surface.ts --format esm --dts --clean --target es2022 --platform browser --treeshake --splitting --external three --external three/webgpu --external three/tsl --external 'three/addons/*' --tsconfig tsconfig.lib.json",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
@@ -57,13 +61,16 @@
     "visual:baseline": "npm run build && WATER_VISUAL_BASELINE=1 node scripts/visual-gate.mjs",
     "visual:gate": "npm run build && node scripts/visual-gate.mjs"
   },
-  "dependencies": {},
+  "peerDependencies": {
+    "three": ">=0.184.0 <0.185.0"
+  },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^20",
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.185.4",
     "@webgpu/types": "^0.1.71",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
@@ -72,6 +79,7 @@
     "pngjs": "^7.0.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "three": "^0.184.0",
     "tsup": "^8.5.0",
     "typescript": "^5",
     "vitest": "^4.1.10"
